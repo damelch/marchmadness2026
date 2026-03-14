@@ -18,11 +18,15 @@ class Predictor:
         team_stats: pd.DataFrame | None = None,
         massey: pd.DataFrame | None = None,
         seed_map: dict[int, int] | None = None,
+        kenpom_df: pd.DataFrame | None = None,
+        kenpom_id_to_name: dict[int, str] | None = None,
     ):
         self.model = model
         self.team_stats = team_stats
         self.massey = massey
         self.seed_map = seed_map or {}
+        self.kenpom_df = kenpom_df
+        self.kenpom_id_to_name = kenpom_id_to_name or {}
 
     @classmethod
     def from_saved(
@@ -35,18 +39,65 @@ class Predictor:
         model = load_model(model_path)
         return cls(model=model, team_stats=team_stats, massey=massey, seed_map=seed_map)
 
+    @classmethod
+    def from_kenpom(
+        cls,
+        kenpom_path: str | Path = "data/kenpom_2026.csv",
+        teams_csv: str | Path = "data/raw/MTeams.csv",
+        model_path: str | Path | None = "models/saved/model.pkl",
+        seed_map: dict[int, int] | None = None,
+    ) -> "Predictor":
+        """Create a Predictor using KenPom ratings as team stats.
+
+        If a trained model exists, uses KenPom stats as features for the ML model.
+        Otherwise, falls back to KenPom-based direct prediction.
+        """
+        from data.kenpom import load_kenpom, load_kenpom_as_team_stats
+
+        kenpom_df = load_kenpom(kenpom_path)
+        team_stats = load_kenpom_as_team_stats(kenpom_path, teams_csv)
+
+        # Build ID -> name mapping for KenPom direct prediction fallback
+        id_to_name = dict(zip(team_stats["TeamID"], team_stats["TeamName"]))
+
+        model = None
+        if model_path and Path(model_path).exists():
+            model = load_model(model_path)
+
+        return cls(
+            model=model,
+            team_stats=team_stats,
+            seed_map=seed_map or {},
+            kenpom_df=kenpom_df,
+            kenpom_id_to_name=id_to_name,
+        )
+
     def predict_matchup(self, team_a: int, team_b: int) -> float:
         """Predict P(team_a wins) for a single matchup.
 
-        Falls back to seed-based probability if model features unavailable.
+        Priority:
+        1. ML model with team stats (best if trained model exists)
+        2. KenPom efficiency margin direct prediction
+        3. Seed-based historical probability (fallback)
         """
+        # 1. ML model
         if self.model is not None and self.team_stats is not None:
             features = self._build_features(team_a, team_b)
             if features is not None:
                 df = pd.DataFrame([features])
                 return float(self.model.predict_proba(df)[0])
 
-        # Fallback: seed-based probability
+        # 2. KenPom direct prediction
+        if self.kenpom_df is not None:
+            name_a = self.kenpom_id_to_name.get(team_a)
+            name_b = self.kenpom_id_to_name.get(team_b)
+            if name_a and name_b:
+                from data.kenpom import kenpom_predict_matchup
+                p = kenpom_predict_matchup(name_a, name_b, self.kenpom_df)
+                if p != 0.5 or (name_a != name_b):  # 0.5 means lookup failed
+                    return p
+
+        # 3. Seed-based fallback
         seed_a = self.seed_map.get(team_a, 8)
         seed_b = self.seed_map.get(team_b, 8)
         return get_seed_win_prob(seed_a, seed_b)
