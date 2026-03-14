@@ -1,8 +1,8 @@
 # March Madness Survivor Pool Optimizer
 
-Maximize expected value in NCAA tournament survivor pools. Pick one team per round to win — if they lose, you're eliminated. Last survivor(s) split the pot.
+Maximize expected value in NCAA tournament survivor pools. Pick teams each day to win straight-up — if any pick loses, you're eliminated. Last survivor(s) split the pot.
 
-This isn't a bracket contest optimizer. It's built specifically for **survivor pools** where the key decisions are: which team to pick each round, when to burn a top team vs. save it, and how to differentiate across multiple entries.
+This isn't a bracket contest optimizer. It's built specifically for **survivor pools** where the key decisions are: which team(s) to pick each day, when to burn a top team vs. save it, and how to differentiate across multiple entries. Supports **double-pick days** where both picks must win to survive.
 
 ## Quick Start
 
@@ -18,15 +18,39 @@ marchmadness evaluate        # Verify calibration
 
 # After Selection Sunday — optimize picks
 marchmadness simulate        # Monte Carlo advancement probabilities
-marchmadness optimize --round 1 --method both
+marchmadness schedule        # View the 9-day contest schedule
+marchmadness optimize --day 1 --method both
 
 # During tournament
-marchmadness results --round 1 <winning_team_ids>
-marchmadness optimize --round 2
+marchmadness results --day 1 <winning_team_ids>
+marchmadness optimize --day 2
 marchmadness status
 ```
 
 Requires Python >= 3.11 and a [Kaggle API key](https://www.kaggle.com/docs/api) for data download.
+
+### Docker
+
+```bash
+# Build the image
+docker build -t marchmadness .
+
+# Run any command
+docker run --rm marchmadness schedule
+docker run --rm marchmadness optimize --day 1 --method both
+
+# Mount volumes for persistent data and config
+docker run --rm \
+  -v $(pwd)/data:/app/data \
+  -v $(pwd)/config.yaml:/app/config.yaml \
+  -v $(pwd)/entries:/app/entries \
+  marchmadness optimize --day 1
+
+# Interactive shell
+docker run --rm -it --entrypoint bash marchmadness
+```
+
+The Docker image uses Python 3.12 and includes all dependencies. Mount your `data/`, `entries/`, and `config.yaml` to persist state between runs.
 
 ## How It Works
 
@@ -81,12 +105,12 @@ No Monte Carlo noise. Accounts for opponent ownership (picking a team everyone e
 
 Your edge comes from the gap between Nash (what the field should do) and heuristic (what the field actually does). Against casual pools that overweight chalk, Nash identifies which contrarian picks carry the most value.
 
-**Dynamic Programming** — Multi-round planning via backward induction. Should you use a 1-seed now (99% safe) or save it for a later round where alternatives are scarce?
+**Dynamic Programming** — Multi-day planning via backward induction across all 9 contest days. Should you use a 1-seed now (99% safe) or save it for a later day where alternatives are scarce?
 
 For each team, computes:
-- `future_value` = how valuable this team is in future rounds
-- `scarcity` = how many viable alternatives exist in each future round
-- Adjusted EV = current_round_EV - future_value_penalty
+- `future_value` = how valuable this team is in future days
+- `scarcity` = how many viable alternatives exist in each future day (double-pick days get extra weight)
+- Adjusted EV = current_day_EV - future_value_penalty
 
 The result: picks that balance safety now against optionality later.
 
@@ -164,6 +188,26 @@ Each entry gets a different team from a different game. This way:
 
 The optimizer balances **total EV** against **diversification** — concentrating all entries on the highest-EV team maximizes raw EV but creates catastrophic correlation risk.
 
+## Contest Schedule
+
+The optimizer uses a **day-based** schedule matching real survivor pool contest rules. The tournament spans 9 decision days with 12 total picks:
+
+| Day | Round | Regions | Picks | Note |
+|-----|-------|---------|-------|------|
+| 1 | R64 Thu | W, X | **2** | Both must win |
+| 2 | R64 Fri | Y, Z | **2** | Both must win |
+| 3 | R32 Sat | W, X | 1 | |
+| 4 | R32 Sun | Y, Z | 1 | |
+| 5 | S16 Thu | W, X | 1 | |
+| 6 | S16 Fri | Y, Z | 1 | |
+| 7 | E8 | All | **2** | Both must win |
+| 8 | Final Four | — | 1 | |
+| 9 | Championship | — | 1 | |
+
+On double-pick days (1, 2, 7), you select two teams and **both must win** for your entry to survive. Teams can only be used once across the entire tournament.
+
+Run `marchmadness schedule` to view the full schedule with dates.
+
 ## Configuration
 
 Edit `config.yaml`:
@@ -176,7 +220,7 @@ pool:
   entry_cost: 50          # Cost per entry
   risk_tolerance: 0.5     # 0=conservative, 1=aggressive
   rules:
-    reuse_allowed: false   # Can't pick same team twice across rounds
+    reuse_allowed: false   # Can't pick same team twice across days
 ```
 
 ## Bracket Setup
@@ -198,8 +242,11 @@ Team IDs should match Kaggle's TeamID from `MTeams.csv` if you've trained a mode
 
 ```
 marchmadness2026/
-├── cli.py                     # CLI commands
-├── config.yaml                # Pool and model settings
+├── cli.py                     # CLI commands (day-based)
+├── config.yaml                # Pool, model, and contest schedule settings
+├── Dockerfile                 # Docker containerization
+├── contest/
+│   └── schedule.py            # Day-based contest schedule (9 days, 12 picks)
 ├── data/
 │   ├── scrapers/
 │   │   ├── kaggle_data.py     # Historical NCAA data
@@ -216,18 +263,18 @@ marchmadness2026/
 │   ├── engine.py              # Monte Carlo tournament simulator
 │   └── analysis.py            # Survivor pool outcome analysis
 ├── optimizer/
-│   ├── analytical.py          # Exact closed-form EV
+│   ├── analytical.py          # Exact closed-form EV (single + double-pick)
 │   ├── nash.py                # Nash equilibrium solver
-│   ├── dp.py                  # Dynamic programming planner
+│   ├── dp.py                  # Dynamic programming planner (9-day)
 │   ├── ownership.py           # Ownership estimation (heuristic/Nash/blend)
 │   ├── portfolio.py           # Portfolio optimizer
 │   ├── survival.py            # Survival probability math
 │   ├── differentiation.py     # Leverage-based pick ranking
 │   └── kelly.py               # Kelly Criterion for entry count
 ├── entries/
-│   ├── manager.py             # Track picks and eliminations
+│   ├── manager.py             # Track picks and eliminations (day-based)
 │   └── generator.py           # Full optimization pipeline
-└── tests/                     # 66 tests
+└── tests/                     # Test suite
 ```
 
 ## Tests
