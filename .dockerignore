@@ -4,4 +4,5 @@ __pycache__
 .git
 .ruff_cache
 .pytest_cache
+.venv
 models/saved/*.pkl

@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "marchmadness2026"
@@ -29,6 +29,12 @@ dev = [
 
 [project.scripts]
 marchmadness = "cli:main"
+
+[tool.setuptools]
+py-modules = ["cli"]
+
+[tool.setuptools.packages.find]
+include = ["data*", "models*", "optimizer*", "simulation*", "entries*", "contest*"]
 
 [tool.ruff]
 line-length = 100
