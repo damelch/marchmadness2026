@@ -100,6 +100,45 @@ Three modes:
 - **Nash** — Mathematically optimal ownership for sharp pools
 - **Blend** — Weighted mix controlled by `pool_sophistication` parameter (recommended)
 
+## Example Output
+
+Sample optimizer output for one region (8 games), using KenPom 2026 ratings with a 100-entry pool and $5,000 prize:
+
+```
+OPTIMIZER OUTPUT - Round 1 (sample region)
+===========================================================================
+Team                 Seed   Win%  Heur Own  Nash Own       EV
+---------------------------------------------------------------------------
+Duke                    1 90.6%    20.5%    80.5%  $  59.88  <--
+Florida                 2 86.1%    16.6%    19.5%  $  56.65  <--
+Iowa St.                3 82.4%    13.9%     0.0%  $  54.16  <--
+Gonzaga                 4 74.4%    10.9%     0.0%  $  48.77  <--
+Alabama                 5 68.3%     8.5%     0.0%  $  44.96
+Kansas                  6 65.5%     7.8%     0.0%  $  43.20
+Iowa                    7 57.3%     5.7%     0.0%  $  38.22
+Auburn                  8 52.3%     4.6%     0.0%  $  35.24
+Kentucky                9 47.7%     3.7%     0.0%  $  32.60
+Missouri               10 42.7%     2.9%     0.0%  $  29.64
+Northwestern           11 34.5%     1.8%     0.0%  $  24.73
+Pittsburgh             12 31.7%     1.5%     0.0%  $  23.01
+Drake                  13 25.6%     0.9%     0.0%  $  19.31
+Colorado               14 17.6%     0.4%     0.0%  $  14.04
+Boise St.              15 13.9%     0.2%     0.0%  $  11.66
+Akron                  16  9.4%     0.1%     0.0%  $   8.52
+```
+
+Reading this output:
+
+- **Win%** — KenPom-derived probability of winning the round
+- **Heur Own** — Estimated % of the field picking this team (casual pool model)
+- **Nash Own** — Game-theoretically optimal ownership (what a sharp pool would do)
+- **EV** — Expected value of picking this team given pool size, prize, and field behavior
+- **`<--`** — Recommended picks (highest EV)
+
+Notice the gap between Heuristic and Nash ownership — Duke gets 20.5% in a casual pool but Nash says 80.5%. This gap is where your edge lives. The optimizer finds picks where Win% is high relative to how many opponents are picking that team.
+
+With 5 entries, the DP planner might recommend saving Duke for a later round (high future value) and picking Iowa St. instead (still 82.4% to win, but more expendable in future rounds).
+
 ## Configuration
 
 Edit `config.yaml`:
