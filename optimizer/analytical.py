@@ -253,10 +253,22 @@ def optimal_multi_entry(
         viable = list(available_teams.keys())
 
     # Score each team: EV adjusted by future value
+    # FV is accumulated across all future days, so normalize it relative to
+    # the current day's EV scale. Scale factor: max single-day EV / max FV,
+    # then apply a weight (0.5 = use half the future value as opportunity cost).
+    team_evs = {t: exact_pick_ev(t, win_probs, ownership, pool_size, prize_pool, n_entries)
+                for t in viable}
+    max_ev = max(team_evs.values()) if team_evs else 1.0
+    fv_vals = [future_values.get(t, 0.0) for t in viable]
+    max_fv = max(fv_vals) if fv_vals else 1.0
+
+    fv_weight = 0.3  # How much to penalize using high-FV teams now
+    fv_scale = (max_ev / max_fv) * fv_weight if max_fv > 0 else 0.0
+
     team_scores = {}
     for t in viable:
-        ev = exact_pick_ev(t, win_probs, ownership, pool_size, prize_pool, n_entries)
-        fv = future_values.get(t, 0.0)
+        ev = team_evs[t]
+        fv = future_values.get(t, 0.0) * fv_scale
         team_scores[t] = ev - fv
 
     # Sort viable teams by score descending
@@ -449,80 +461,107 @@ def optimal_day_picks(
         if valid_pair(a, b)
     ]
 
-    # Score each pair by EV
-    pair_scores = {}
+    # Score each pair by EV, with normalized future value penalty
+    # Compute raw EVs first to establish scale
+    pair_evs = {}
     for pair in all_pairs:
-        pick_set = list(pair)
-        ev = exact_day_ev(
-            pick_set, win_probs, ownership, pool_size, prize_pool,
+        pair_evs[pair] = exact_day_ev(
+            list(pair), win_probs, ownership, pool_size, prize_pool,
             num_picks_per_opponent=num_picks, n_our_entries=n_entries,
             matchup_pairs=matchup_pairs,
         )
-        fv_cost = sum(future_values.get(t, 0.0) for t in pick_set)
-        pair_scores[pair] = ev - fv_cost
+
+    max_pair_ev = max(pair_evs.values()) if pair_evs else 1.0
+    all_fv_costs = [sum(future_values.get(t, 0.0) for t in p) for p in all_pairs]
+    max_fv_cost = max(all_fv_costs) if all_fv_costs else 1.0
+
+    fv_weight = 0.3
+    fv_scale = (max_pair_ev / max_fv_cost) * fv_weight if max_fv_cost > 0 else 0.0
+
+    pair_scores = {}
+    for pair in all_pairs:
+        fv_cost = sum(future_values.get(t, 0.0) for t in pair) * fv_scale
+        pair_scores[pair] = pair_evs[pair] - fv_cost
 
     # Sort pairs by score
     sorted_pairs = sorted(all_pairs, key=lambda p: pair_scores.get(p, 0), reverse=True)
 
-    # Greedy assignment: each entry gets a unique pair (no shared teams across entries)
+    def _portfolio_diversity_bonus(picks_list: list[list[int]]) -> float:
+        """Bonus for having picks spread across independent games.
+
+        If all entries share the same pair, one upset kills everything.
+        Reward portfolios where entries depend on different games.
+        """
+        if len(picks_list) <= 1:
+            return 0.0
+        # Count how many entries depend on each team
+        from collections import Counter
+        team_counts = Counter(t for ps in picks_list for t in ps)
+        # Max possible concentration: n_entries * num_picks
+        total_slots = sum(team_counts.values())
+        # Diversity = 1 - HHI (Herfindahl index)
+        hhi = sum((c / total_slots) ** 2 for c in team_counts.values())
+        # Scale bonus to be ~10-20% of a pair's EV
+        best_ev = max(pair_evs.values()) if pair_evs else 1.0
+        return (1.0 - hhi) * best_ev * 0.25
+
+    def _score_portfolio(picks_list: list[list[int]]) -> float:
+        total_ev = sum(
+            exact_day_ev(
+                ps, win_probs, ownership, pool_size, prize_pool,
+                num_picks, n_our_entries=n_entries, matchup_pairs=matchup_pairs,
+            )
+            for ps in picks_list
+        )
+        fv_penalty = sum(
+            sum(future_values.get(t, 0.0) for t in ps) * fv_scale
+            for ps in picks_list
+        )
+        diversity = _portfolio_diversity_bonus(picks_list)
+        return total_ev - fv_penalty + diversity
+
+    # Greedy assignment with soft diversity preference
     picks: list[list[int]] = []
-    used_this_day: set[int] = set()
+    used_teams_count: dict[int, int] = {}  # Track how many entries use each team
 
     for entry_idx in range(n_entries):
         used = used_teams_per_entry[entry_idx]
         best_pair = None
         best_score = -float("inf")
 
-        for pair in sorted_pairs:
+        for pair in sorted_pairs[:60]:
             a, b = pair
             if a in used or b in used:
                 continue
-            # Prefer pairs that don't overlap with other entries' picks this day
-            if a in used_this_day or b in used_this_day:
-                continue
-            score = pair_scores.get(pair, 0)
+            # Penalize overlap: each additional entry on same team reduces score
+            overlap_penalty = (
+                used_teams_count.get(a, 0) + used_teams_count.get(b, 0)
+            ) * pair_scores.get(sorted_pairs[0], 1.0) * 0.25
+            score = pair_scores.get(pair, 0) - overlap_penalty
             if score > best_score:
                 best_score = score
                 best_pair = pair
 
         if best_pair is None:
-            # Relax: allow team overlap across entries
-            for pair in sorted_pairs:
-                a, b = pair
-                if a in used or b in used:
-                    continue
-                best_pair = pair
-                break
-
-        if best_pair is None:
-            # Last resort: pick the best pair ignoring all constraints
             best_pair = sorted_pairs[0] if sorted_pairs else (viable[0], viable[1])
 
         picks.append(list(best_pair))
-        used_this_day.update(best_pair)
+        for t in best_pair:
+            used_teams_count[t] = used_teams_count.get(t, 0) + 1
 
-    # Local search: swap pairs to improve portfolio
+    # Local search: swap pairs to improve portfolio score (EV + diversity - FV)
     improved = True
-    max_iters = 15
+    max_iters = 20
     iters = 0
+    current_score = _score_portfolio(picks)
 
     while improved and iters < max_iters:
         improved = False
         iters += 1
 
-        # Score current portfolio
-        flat_picks = [t for pick_set in picks for t in pick_set]
-        current_total_ev = sum(
-            exact_day_ev(
-                ps, win_probs, ownership, pool_size, prize_pool,
-                num_picks, n_our_entries=n_entries, matchup_pairs=matchup_pairs,
-            )
-            for ps in picks
-        )
-
         for e_idx in range(n_entries):
             used = used_teams_per_entry[e_idx]
-            for pair in sorted_pairs[:20]:
+            for pair in sorted_pairs[:50]:
                 a, b = pair
                 if a in used or b in used:
                     continue
@@ -531,18 +570,11 @@ def optimal_day_picks(
 
                 trial = [ps[:] for ps in picks]
                 trial[e_idx] = list(pair)
+                trial_score = _score_portfolio(trial)
 
-                trial_ev = sum(
-                    exact_day_ev(
-                        ps, win_probs, ownership, pool_size, prize_pool,
-                        num_picks, n_our_entries=n_entries, matchup_pairs=matchup_pairs,
-                    )
-                    for ps in trial
-                )
-
-                if trial_ev > current_total_ev * 1.001:
+                if trial_score > current_score + 0.01:
                     picks[e_idx] = list(pair)
-                    current_total_ev = trial_ev
+                    current_score = trial_score
                     improved = True
 
     return picks

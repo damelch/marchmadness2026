@@ -92,10 +92,12 @@ class Predictor:
             name_a = self.kenpom_id_to_name.get(team_a)
             name_b = self.kenpom_id_to_name.get(team_b)
             if name_a and name_b:
-                from data.kenpom import kenpom_predict_matchup
-                p = kenpom_predict_matchup(name_a, name_b, self.kenpom_df)
-                if p != 0.5 or (name_a != name_b):  # 0.5 means lookup failed
-                    return p
+                # Only use KenPom if both teams are actually in the dataset
+                has_a = (self.kenpom_df["Team"] == name_a).any()
+                has_b = (self.kenpom_df["Team"] == name_b).any()
+                if has_a and has_b:
+                    from data.kenpom import kenpom_predict_matchup
+                    return kenpom_predict_matchup(name_a, name_b, self.kenpom_df)
 
         # 3. Seed-based fallback
         seed_a = self.seed_map.get(team_a, 8)

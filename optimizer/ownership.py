@@ -12,9 +12,9 @@ from simulation.engine import TournamentBracket
 
 # Seed-based popularity bias (casual pools overweight favorites)
 SEED_POPULARITY_BIAS = {
-    1: 1.5,
-    2: 1.3,
-    3: 1.15,
+    1: 3.0,
+    2: 2.0,
+    3: 1.5,
     4: 1.1,
     5: 1.0,
     6: 1.0,
@@ -26,8 +26,8 @@ SEED_POPULARITY_BIAS = {
     12: 0.8,
     13: 0.7,
     14: 0.6,
-    15: 0.4,
-    16: 0.2,
+    15: 0.2,
+    16: 0.05,
 }
 
 
@@ -115,9 +115,13 @@ def estimate_ownership_from_bracket(
     method: str = "blend",
     pool_size: int = 100,
     prize_pool: float = 5000,
+    regions: list[str] | None = None,
 ) -> dict[int, float]:
     """Convenience function: estimate ownership from bracket structure."""
-    matchups = bracket.get_round_matchups(round_num)
+    if regions:
+        matchups = bracket.get_day_matchups(round_num, regions)
+    else:
+        matchups = bracket.get_round_matchups(round_num)
     available = {}
     for team_a, team_b, _ in matchups:
         if team_a and team_a in bracket.teams:

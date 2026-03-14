@@ -99,7 +99,7 @@ def generate_picks(
         "recommendations": {},
     }
 
-    # Step 2: Estimate ownership (method-dependent)
+    # Step 2: Estimate ownership (method-dependent, filtered to today's regions)
     if method == "hybrid":
         ownership = estimate_ownership_from_bracket(
             bracket, round_num, win_probs,
@@ -107,6 +107,7 @@ def generate_picks(
             method="blend",
             pool_size=pool_size,
             prize_pool=prize_pool,
+            regions=day.regions,
         )
 
         nash_own = nash_equilibrium(win_probs, pool_size, prize_pool)
@@ -121,12 +122,14 @@ def generate_picks(
             bracket, round_num, win_probs,
             pool_sophistication=1 - pool_cfg.get("risk_tolerance", 0.5),
             method="heuristic",
+            regions=day.regions,
         )
     else:  # differentiation
         ownership = estimate_ownership_from_bracket(
             bracket, round_num, win_probs,
             pool_sophistication=1 - pool_cfg.get("risk_tolerance", 0.5),
             method="heuristic",
+            regions=day.regions,
         )
 
     results["ownership"] = ownership

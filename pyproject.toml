@@ -18,6 +18,8 @@ dependencies = [
     "matplotlib>=3.7",
     "seaborn>=0.12",
     "requests>=2.31",
+    "lightgbm>=4.0",
+    "catboost>=1.2",
 ]
 
 [project.optional-dependencies]

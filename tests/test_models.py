@@ -102,3 +102,60 @@ class TestSyntheticModel:
         assert all(0 <= p <= 1 for p in preds)
         # Ensemble should be between logistic and xgboost
         assert abs(preds.mean() - 0.5) < 0.3
+
+    def test_lightgbm_model(self):
+        from models.train import LightGBMModel
+        df = self._make_synthetic_data()
+        model = LightGBMModel(calibrate=False)
+        model.fit(df, df["Result"])
+        preds = model.predict_proba(df)
+        assert preds.shape == (len(df),)
+        assert all(0 <= p <= 1 for p in preds)
+
+    def test_catboost_model(self):
+        from models.train import CatBoostModel
+        df = self._make_synthetic_data()
+        model = CatBoostModel(calibrate=False)
+        model.fit(df, df["Result"])
+        preds = model.predict_proba(df)
+        assert preds.shape == (len(df),)
+        assert all(0 <= p <= 1 for p in preds)
+
+    def test_randomforest_model(self):
+        from models.train import RandomForestModel
+        df = self._make_synthetic_data()
+        model = RandomForestModel()
+        model.fit(df, df["Result"])
+        preds = model.predict_proba(df)
+        assert preds.shape == (len(df),)
+        assert all(0 <= p <= 1 for p in preds)
+
+    def test_naivebayes_model(self):
+        from models.train import NaiveBayesModel
+        df = self._make_synthetic_data()
+        model = NaiveBayesModel()
+        model.fit(df, df["Result"])
+        preds = model.predict_proba(df)
+        assert preds.shape == (len(df),)
+        assert all(0 <= p <= 1 for p in preds)
+
+    def test_stacked_model(self):
+        from models.train import StackedEnsemble
+        df = self._make_synthetic_data(n=300)
+        model = StackedEnsemble(calibrate=False)
+        model.fit(df, df["Result"])
+        preds = model.predict_proba(df)
+        assert preds.shape == (len(df),)
+        assert all(0 <= p <= 1 for p in preds)
+
+    def test_stacked_model_pickleable(self):
+        import pickle
+        from models.train import StackedEnsemble
+        df = self._make_synthetic_data(n=300)
+        model = StackedEnsemble(calibrate=False)
+        model.fit(df, df["Result"])
+        data = pickle.dumps(model)
+        loaded = pickle.loads(data)
+        preds_orig = model.predict_proba(df)
+        preds_loaded = loaded.predict_proba(df)
+        np.testing.assert_array_almost_equal(preds_orig, preds_loaded)

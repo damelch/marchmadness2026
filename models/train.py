@@ -11,10 +11,23 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import LeaveOneGroupOut
 from sklearn.metrics import log_loss, brier_score_loss
 
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.naive_bayes import GaussianNB
+
 try:
     import xgboost as xgb
 except ImportError:
     xgb = None
+
+try:
+    import lightgbm as lgb
+except ImportError:
+    lgb = None
+
+try:
+    import catboost as cb
+except ImportError:
+    cb = None
 
 from data.feature_engineering import FEATURE_COLUMNS
 
@@ -90,12 +103,171 @@ class EnsembleModel:
         return (p1 + p2) / 2
 
 
+class LightGBMModel:
+    """LightGBM gradient boosting model."""
+
+    def __init__(self, calibrate: bool = True):
+        if lgb is None:
+            raise ImportError("lightgbm is required. Install with: pip install lightgbm")
+        self.calibrate = calibrate
+        self.base_model = lgb.LGBMClassifier(
+            objective="binary",
+            metric="binary_logloss",
+            num_leaves=31,
+            n_estimators=200,
+            learning_rate=0.05,
+            min_child_samples=10,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42,
+            verbosity=-1,
+        )
+        self.model = None
+
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> None:
+        features = X[FEATURE_COLUMNS].values
+        if self.calibrate:
+            self.model = CalibratedClassifierCV(
+                self.base_model, method="isotonic", cv=5
+            )
+        else:
+            self.model = self.base_model
+        self.model.fit(features, y)
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        return self.model.predict_proba(X[FEATURE_COLUMNS].values)[:, 1]
+
+
+class CatBoostModel:
+    """CatBoost gradient boosting model."""
+
+    def __init__(self, calibrate: bool = True):
+        if cb is None:
+            raise ImportError("catboost is required. Install with: pip install catboost")
+        self.calibrate = calibrate
+        self.base_model = cb.CatBoostClassifier(
+            depth=4,
+            iterations=200,
+            learning_rate=0.05,
+            random_seed=42,
+            verbose=0,
+        )
+        self.model = None
+
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> None:
+        features = X[FEATURE_COLUMNS].values
+        if self.calibrate:
+            self.model = CalibratedClassifierCV(
+                self.base_model, method="isotonic", cv=5
+            )
+        else:
+            self.model = self.base_model
+        self.model.fit(features, y)
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        return self.model.predict_proba(X[FEATURE_COLUMNS].values)[:, 1]
+
+
+class RandomForestModel:
+    """Random Forest classifier."""
+
+    def __init__(self):
+        self.model = RandomForestClassifier(
+            n_estimators=500,
+            max_depth=6,
+            min_samples_leaf=10,
+            random_state=42,
+        )
+
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> None:
+        self.model.fit(X[FEATURE_COLUMNS].values, y)
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        return self.model.predict_proba(X[FEATURE_COLUMNS].values)[:, 1]
+
+
+class NaiveBayesModel:
+    """Gaussian Naive Bayes model. Provides ensemble diversity."""
+
+    def __init__(self):
+        self.model = GaussianNB()
+
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> None:
+        self.model.fit(X[FEATURE_COLUMNS].values, y)
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        return self.model.predict_proba(X[FEATURE_COLUMNS].values)[:, 1]
+
+
+class StackedEnsemble:
+    """Stacked ensemble: 6 base models + logistic regression meta-learner.
+
+    Uses leave-one-season-out CV to generate out-of-fold predictions,
+    then trains a meta-learner on those predictions.
+    """
+
+    def __init__(self, calibrate: bool = True):
+        self.calibrate = calibrate
+        self.base_models = None
+        self.meta_learner = LogisticRegression(max_iter=1000)
+
+    def _make_base_models(self):
+        return [
+            ("logistic", LogisticBaseline()),
+            ("xgboost", XGBoostModel(calibrate=self.calibrate)),
+            ("lightgbm", LightGBMModel(calibrate=self.calibrate)),
+            ("catboost", CatBoostModel(calibrate=self.calibrate)),
+            ("randomforest", RandomForestModel()),
+            ("naivebayes", NaiveBayesModel()),
+        ]
+
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> None:
+        seasons = sorted(X["Season"].unique())
+        n_models = 6
+        oof_preds = np.zeros((len(X), n_models))
+        oof_mask = np.zeros(len(X), dtype=bool)
+
+        # Generate out-of-fold predictions via leave-one-season-out
+        for holdout_season in seasons:
+            train_idx = X["Season"] != holdout_season
+            test_idx = X["Season"] == holdout_season
+
+            if train_idx.sum() < 50 or test_idx.sum() < 10:
+                continue
+
+            fold_models = self._make_base_models()
+            for i, (name, model) in enumerate(fold_models):
+                model.fit(X[train_idx], y[train_idx])
+                oof_preds[test_idx.values, i] = model.predict_proba(X[test_idx])
+
+            oof_mask |= test_idx.values
+
+        # Train meta-learner on OOF predictions
+        self.meta_learner.fit(oof_preds[oof_mask], y[oof_mask])
+
+        # Retrain all base models on full data for inference
+        self.base_models = self._make_base_models()
+        for name, model in self.base_models:
+            model.fit(X, y)
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        base_preds = np.column_stack([
+            model.predict_proba(X) for name, model in self.base_models
+        ])
+        return self.meta_learner.predict_proba(base_preds)[:, 1]
+
+
 def get_model(model_type: str = "xgboost", calibrate: bool = True) -> WinProbabilityModel:
     """Factory function for models."""
     models = {
         "logistic": lambda: LogisticBaseline(),
         "xgboost": lambda: XGBoostModel(calibrate=calibrate),
+        "lightgbm": lambda: LightGBMModel(calibrate=calibrate),
+        "catboost": lambda: CatBoostModel(calibrate=calibrate),
+        "randomforest": lambda: RandomForestModel(),
+        "naivebayes": lambda: NaiveBayesModel(),
         "ensemble": lambda: EnsembleModel(calibrate=calibrate),
+        "stacked": lambda: StackedEnsemble(calibrate=calibrate),
     }
     if model_type not in models:
         raise ValueError(f"Unknown model type: {model_type}. Choose from {list(models.keys())}")

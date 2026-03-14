@@ -13,7 +13,7 @@ pip install -e ".[dev]"
 # Before bracket is announced — train on historical data
 marchmadness download        # Kaggle NCAA data (2013-2025)
 marchmadness features        # Build KenPom-style feature matrix
-marchmadness train           # Train XGBoost model
+marchmadness train           # Train model (default: xgboost, or set in config.yaml)
 marchmadness evaluate        # Verify calibration
 
 # After Selection Sunday — optimize picks
@@ -58,7 +58,9 @@ The Docker image uses Python 3.12 and includes all dependencies. Mount your `dat
 
 Three-tier prediction with automatic fallback:
 
-**1. XGBoost with isotonic calibration** (primary)
+**1. Stacked ensemble with 6 base models** (primary)
+
+A meta-learner (logistic regression) trained on out-of-fold predictions from 6 base models: Logistic Regression, XGBoost, LightGBM, CatBoost, Random Forest, and Gaussian Naive Bayes. The meta-learner uses leave-one-season-out cross-validation to learn optimal model weights without overfitting. Individual models are also available (`xgboost`, `lightgbm`, `catboost`, `randomforest`, `naivebayes`, `logistic`).
 
 Trained on 12 seasons of NCAA tournament results (2013-2025, excluding 2020). Features are differences between teams:
 
@@ -221,6 +223,11 @@ pool:
   risk_tolerance: 0.5     # 0=conservative, 1=aggressive
   rules:
     reuse_allowed: false   # Can't pick same team twice across days
+
+model:
+  type: "stacked"         # logistic, xgboost, lightgbm, catboost,
+                          # randomforest, naivebayes, ensemble, stacked
+  calibrate: true         # Isotonic calibration for base models
 ```
 
 ## Bracket Setup
@@ -256,7 +263,7 @@ marchmadness2026/
 │   ├── kenpom.py              # KenPom ratings integration
 │   └── kenpom_2026.csv        # 2026 KenPom ratings (365 teams)
 ├── models/
-│   ├── train.py               # Logistic, XGBoost, Ensemble
+│   ├── train.py               # Logistic, XGBoost, LightGBM, CatBoost, RF, NB, Stacked Ensemble
 │   ├── predict.py             # Win probability predictor
 │   └── evaluate.py            # Calibration & accuracy
 ├── simulation/
@@ -283,4 +290,4 @@ marchmadness2026/
 pytest tests/ -v
 ```
 
-66 tests covering model training, bracket simulation, analytical EV math, Nash equilibrium convergence, DP future values, and KenPom integration.
+111 tests covering model training (all 8 model types including stacked ensemble pickle round-trip), bracket simulation, analytical EV math, Nash equilibrium convergence, DP future values, and KenPom integration.

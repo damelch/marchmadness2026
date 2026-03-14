@@ -143,7 +143,7 @@ def compute_future_values(
     ownership_by_round: dict[int, dict[int, float]] | None = None,
     pool_size: int = 100,
     prize_pool: float = 5000,
-    discount: float = 0.85,
+    discount: float = 0.75,
 ) -> dict[int, float]:
     """Compute future value of each team across remaining contest days.
 
@@ -213,7 +213,12 @@ def compute_future_values(
             # On double-pick days, teams are more valuable because you
             # need 2 viable picks (scarcer resource)
             if future_day.is_double_pick:
-                scar = min(scar * 1.3, 1.0)
+                scar = min(scar * 1.8, 1.0)
+
+            # Top seeds are irreplaceable across the 9-day contest
+            seed = bracket.teams.get(team_id, {}).get("seed", 8)
+            if seed <= 2:
+                scar = min(scar + 0.3, 1.0)
 
             # Ownership estimate
             if ownership_by_round and r in ownership_by_round:

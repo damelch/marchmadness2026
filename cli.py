@@ -137,11 +137,34 @@ def simulate(ctx):
         with open(bracket_path) as f:
             bracket_data = json.load(f)
         bracket = _load_bracket(bracket_data)
-        model = load_model()
-        predictor = Predictor(model=model, seed_map={
-            t: info["seed"] for t, info in bracket.teams.items()
-        })
-        predict_fn = predictor.predict_matchup
+
+        seed_map = {t: info["seed"] for t, info in bracket.teams.items()}
+        model_path = Path("models/saved/model.pkl")
+        kenpom_path = Path("data/kenpom_2026.csv")
+
+        if model_path.exists():
+            model = load_model()
+            predictor = Predictor(model=model, seed_map=seed_map)
+            predict_fn = predictor.predict_matchup
+            click.echo("Using trained ML model")
+        elif kenpom_path.exists():
+            from data.kenpom import load_kenpom
+            kenpom_df = load_kenpom(kenpom_path)
+            # Map bracket team IDs to names for KenPom lookup
+            id_to_name = {t: info["name"] for t, info in bracket.teams.items()}
+            predictor = Predictor(
+                kenpom_df=kenpom_df,
+                kenpom_id_to_name=id_to_name,
+                seed_map=seed_map,
+            )
+            predict_fn = predictor.predict_matchup
+            click.echo("No trained model — using KenPom ratings")
+        else:
+            from data.seed_history import get_seed_win_prob
+            predict_fn = lambda a, b: get_seed_win_prob(
+                bracket.teams[a]["seed"], bracket.teams[b]["seed"]
+            )
+            click.echo("No trained model or KenPom data — using seed-based probabilities")
 
     click.echo(f"Running {n_sims:,} simulations...")
     sim_results = simulate_tournament(
@@ -185,7 +208,7 @@ def schedule(ctx):
 
 @main.command()
 @click.option("--day", "day_num", type=int, required=True, help="Contest day number (1-9)")
-@click.option("--method", default="both", type=click.Choice(["differentiation", "portfolio", "both"]))
+@click.option("--method", default="hybrid", type=click.Choice(["differentiation", "analytical", "hybrid"]))
 @click.pass_context
 def optimize(ctx, day_num, method):
     """Generate optimal picks for a contest day."""
@@ -211,10 +234,25 @@ def optimize(ctx, day_num, method):
         import json
         with open(bracket_path) as f:
             bracket = _load_bracket(json.load(f))
-        model = load_model()
-        predictor = Predictor(model=model, seed_map={
-            t: info["seed"] for t, info in bracket.teams.items()
-        })
+
+        seed_map = {t: info["seed"] for t, info in bracket.teams.items()}
+        model_path = Path("models/saved/model.pkl")
+        kenpom_path = Path("data/kenpom_2026.csv")
+
+        if model_path.exists():
+            model = load_model()
+            predictor = Predictor(model=model, seed_map=seed_map)
+        elif kenpom_path.exists():
+            from data.kenpom import load_kenpom
+            kenpom_df = load_kenpom(kenpom_path)
+            id_to_name = {t: info["name"] for t, info in bracket.teams.items()}
+            predictor = Predictor(
+                kenpom_df=kenpom_df,
+                kenpom_id_to_name=id_to_name,
+                seed_map=seed_map,
+            )
+        else:
+            predictor = Predictor(seed_map=seed_map)
 
     entry_path = Path("entries/state.json")
     if entry_path.exists():

@@ -1,0 +1,388 @@
+{
+  "teams": [
+    {
+      "id": 1001,
+      "name": "Duke",
+      "seed": 1,
+      "region": "W"
+    },
+    {
+      "id": 1002,
+      "name": "Howard",
+      "seed": 16,
+      "region": "W"
+    },
+    {
+      "id": 1003,
+      "name": "Iowa",
+      "seed": 8,
+      "region": "W"
+    },
+    {
+      "id": 1004,
+      "name": "Texas A&M",
+      "seed": 9,
+      "region": "W"
+    },
+    {
+      "id": 1005,
+      "name": "Arkansas",
+      "seed": 5,
+      "region": "W"
+    },
+    {
+      "id": 1006,
+      "name": "Stephen F. Austin",
+      "seed": 12,
+      "region": "W"
+    },
+    {
+      "id": 1007,
+      "name": "Texas Tech",
+      "seed": 4,
+      "region": "W"
+    },
+    {
+      "id": 1008,
+      "name": "Utah Valley",
+      "seed": 13,
+      "region": "W"
+    },
+    {
+      "id": 1009,
+      "name": "Wisconsin",
+      "seed": 6,
+      "region": "W"
+    },
+    {
+      "id": 1010,
+      "name": "Miami (OH)",
+      "seed": 11,
+      "region": "W"
+    },
+    {
+      "id": 1011,
+      "name": "Iowa St.",
+      "seed": 3,
+      "region": "W"
+    },
+    {
+      "id": 1012,
+      "name": "Portland St.",
+      "seed": 14,
+      "region": "W"
+    },
+    {
+      "id": 1013,
+      "name": "Saint Mary's",
+      "seed": 7,
+      "region": "W"
+    },
+    {
+      "id": 1014,
+      "name": "NC State",
+      "seed": 10,
+      "region": "W"
+    },
+    {
+      "id": 1015,
+      "name": "Illinois",
+      "seed": 2,
+      "region": "W"
+    },
+    {
+      "id": 1016,
+      "name": "Furman",
+      "seed": 15,
+      "region": "W"
+    },
+    {
+      "id": 1017,
+      "name": "Florida",
+      "seed": 1,
+      "region": "X"
+    },
+    {
+      "id": 1018,
+      "name": "Queens",
+      "seed": 16,
+      "region": "X"
+    },
+    {
+      "id": 1019,
+      "name": "UCLA",
+      "seed": 8,
+      "region": "X"
+    },
+    {
+      "id": 1020,
+      "name": "St. Louis",
+      "seed": 9,
+      "region": "X"
+    },
+    {
+      "id": 1021,
+      "name": "North Carolina",
+      "seed": 5,
+      "region": "X"
+    },
+    {
+      "id": 1022,
+      "name": "South Florida",
+      "seed": 12,
+      "region": "X"
+    },
+    {
+      "id": 1023,
+      "name": "Kansas",
+      "seed": 4,
+      "region": "X"
+    },
+    {
+      "id": 1024,
+      "name": "North Dakota St.",
+      "seed": 13,
+      "region": "X"
+    },
+    {
+      "id": 1025,
+      "name": "Louisville",
+      "seed": 6,
+      "region": "X"
+    },
+    {
+      "id": 1026,
+      "name": "Santa Clara",
+      "seed": 11,
+      "region": "X"
+    },
+    {
+      "id": 1027,
+      "name": "Purdue",
+      "seed": 3,
+      "region": "X"
+    },
+    {
+      "id": 1028,
+      "name": "Hofstra",
+      "seed": 14,
+      "region": "X"
+    },
+    {
+      "id": 1029,
+      "name": "Georgia",
+      "seed": 7,
+      "region": "X"
+    },
+    {
+      "id": 1030,
+      "name": "Ohio St.",
+      "seed": 10,
+      "region": "X"
+    },
+    {
+      "id": 1031,
+      "name": "Connecticut",
+      "seed": 2,
+      "region": "X"
+    },
+    {
+      "id": 1032,
+      "name": "Merrimack",
+      "seed": 15,
+      "region": "X"
+    },
+    {
+      "id": 1033,
+      "name": "Michigan",
+      "seed": 1,
+      "region": "Y"
+    },
+    {
+      "id": 1034,
+      "name": "UMBC",
+      "seed": 16,
+      "region": "Y"
+    },
+    {
+      "id": 1035,
+      "name": "Utah St.",
+      "seed": 8,
+      "region": "Y"
+    },
+    {
+      "id": 1036,
+      "name": "TCU",
+      "seed": 9,
+      "region": "Y"
+    },
+    {
+      "id": 1037,
+      "name": "Vanderbilt",
+      "seed": 5,
+      "region": "Y"
+    },
+    {
+      "id": 1038,
+      "name": "High Point",
+      "seed": 12,
+      "region": "Y"
+    },
+    {
+      "id": 1039,
+      "name": "Virginia",
+      "seed": 4,
+      "region": "Y"
+    },
+    {
+      "id": 1040,
+      "name": "Northern Iowa",
+      "seed": 13,
+      "region": "Y"
+    },
+    {
+      "id": 1041,
+      "name": "Tennessee",
+      "seed": 6,
+      "region": "Y"
+    },
+    {
+      "id": 1042,
+      "name": "SMU",
+      "seed": 11,
+      "region": "Y"
+    },
+    {
+      "id": 1043,
+      "name": "Nebraska",
+      "seed": 3,
+      "region": "Y"
+    },
+    {
+      "id": 1044,
+      "name": "Troy",
+      "seed": 14,
+      "region": "Y"
+    },
+    {
+      "id": 1045,
+      "name": "Villanova",
+      "seed": 7,
+      "region": "Y"
+    },
+    {
+      "id": 1046,
+      "name": "Missouri",
+      "seed": 10,
+      "region": "Y"
+    },
+    {
+      "id": 1047,
+      "name": "Houston",
+      "seed": 2,
+      "region": "Y"
+    },
+    {
+      "id": 1048,
+      "name": "Tennessee St.",
+      "seed": 15,
+      "region": "Y"
+    },
+    {
+      "id": 1049,
+      "name": "Arizona",
+      "seed": 1,
+      "region": "Z"
+    },
+    {
+      "id": 1050,
+      "name": "Lehigh",
+      "seed": 16,
+      "region": "Z"
+    },
+    {
+      "id": 1051,
+      "name": "Kentucky",
+      "seed": 8,
+      "region": "Z"
+    },
+    {
+      "id": 1052,
+      "name": "Clemson",
+      "seed": 9,
+      "region": "Z"
+    },
+    {
+      "id": 1053,
+      "name": "St. John's",
+      "seed": 5,
+      "region": "Z"
+    },
+    {
+      "id": 1054,
+      "name": "Yale",
+      "seed": 12,
+      "region": "Z"
+    },
+    {
+      "id": 1055,
+      "name": "Alabama",
+      "seed": 4,
+      "region": "Z"
+    },
+    {
+      "id": 1056,
+      "name": "Liberty",
+      "seed": 13,
+      "region": "Z"
+    },
+    {
+      "id": 1057,
+      "name": "BYU",
+      "seed": 6,
+      "region": "Z"
+    },
+    {
+      "id": 1058,
+      "name": "Indiana",
+      "seed": 11,
+      "region": "Z"
+    },
+    {
+      "id": 1059,
+      "name": "Gonzaga",
+      "seed": 3,
+      "region": "Z"
+    },
+    {
+      "id": 1060,
+      "name": "UC Irvine",
+      "seed": 14,
+      "region": "Z"
+    },
+    {
+      "id": 1061,
+      "name": "Miami",
+      "seed": 7,
+      "region": "Z"
+    },
+    {
+      "id": 1062,
+      "name": "Texas",
+      "seed": 10,
+      "region": "Z"
+    },
+    {
+      "id": 1063,
+      "name": "Michigan St.",
+      "seed": 2,
+      "region": "Z"
+    },
+    {
+      "id": 1064,
+      "name": "Wright St.",
+      "seed": 15,
+      "region": "Z"
+    }
+  ]
+}
