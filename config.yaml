@@ -1,9 +1,11 @@
 pool:
   num_entries: 5
-  pool_size: 100
-  prize_pool: 5000
-  entry_cost: 50
-  risk_tolerance: 0.5  # 0=conservative, 1=aggressive
+  pool_size: 22000
+  prize_pool: 3000000
+  entry_cost: 150
+  risk_tolerance: 0.7  # 0=conservative, 1=aggressive (higher for WTA)
+  payout_structure: "winner_take_all"  # last standing wins $3M, split if all die same day
+  max_entries_per_user: 150
   rules:
     reuse_allowed: false  # can't pick same team twice across rounds
 

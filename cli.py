@@ -209,8 +209,11 @@ def schedule(ctx):
 @main.command()
 @click.option("--day", "day_num", type=int, required=True, help="Contest day number (1-9)")
 @click.option("--method", default="hybrid", type=click.Choice(["differentiation", "analytical", "hybrid"]))
+@click.option("--pool-size", type=int, default=None, help="Total entries in the contest (default: 10000)")
+@click.option("--num-entries", type=int, default=None, help="Number of your entries (default: from config)")
+@click.option("--max-entries", type=int, default=None, help="Max entries per user allowed (default: 150)")
 @click.pass_context
-def optimize(ctx, day_num, method):
+def optimize(ctx, day_num, method, pool_size, num_entries, max_entries):
     """Generate optimal picks for a contest day."""
     from entries.generator import generate_picks
     from entries.manager import EntryManager
@@ -219,6 +222,18 @@ def optimize(ctx, day_num, method):
 
     config = ctx.obj["config"]
     sched = ctx.obj["schedule"]
+
+    # CLI overrides > config > defaults
+    if pool_size is not None:
+        config["pool"]["pool_size"] = pool_size
+    elif config["pool"].get("pool_size") is None:
+        config["pool"]["pool_size"] = 10000
+    if num_entries is not None:
+        config["pool"]["num_entries"] = num_entries
+    if max_entries is not None:
+        config["pool"]["max_entries_per_user"] = max_entries
+    elif config["pool"].get("max_entries_per_user") is None:
+        config["pool"]["max_entries_per_user"] = 150
 
     day = sched.get_day(day_num)
     click.echo(f"Optimizing picks for Day {day_num} ({day.label}) — {day.num_picks} pick(s)...")
@@ -265,8 +280,13 @@ def optimize(ctx, day_num, method):
 
     results = generate_picks(bracket, predictor, mgr, day_num, sched, config, method)
 
+    pool_size_actual = config["pool"]["pool_size"]
+    prize_pool_actual = config["pool"]["prize_pool"]
+    max_ent = config["pool"].get("max_entries_per_user", 150)
+
     click.echo(f"\n{'='*70}")
     click.echo(f"PICK RECOMMENDATIONS - Day {day_num} ({day.label})")
+    click.echo(f"  Pool: {pool_size_actual:,} entries | Prize: ${prize_pool_actual:,.0f} | Max/user: {max_ent}")
     if day.is_double_pick:
         click.echo(f"  ** Double-pick day: both picks must win to survive **")
     click.echo(f"{'='*70}")

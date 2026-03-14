@@ -262,13 +262,18 @@ def optimal_multi_entry(
     fv_vals = [future_values.get(t, 0.0) for t in viable]
     max_fv = max(fv_vals) if fv_vals else 1.0
 
-    fv_weight = 0.3  # How much to penalize using high-FV teams now
+    fv_weight = 0.3  # Base penalty for using high-FV teams now
     fv_scale = (max_ev / max_fv) * fv_weight if max_fv > 0 else 0.0
+
+    # Top seeds are scarce (only 4 one-seeds across 9 days) — extra penalty
+    SEED_FV_MULTIPLIER = {1: 4.0, 2: 3.5, 3: 1.5}
 
     team_scores = {}
     for t in viable:
         ev = team_evs[t]
-        fv = future_values.get(t, 0.0) * fv_scale
+        seed = available_teams.get(t, 8)
+        seed_mult = SEED_FV_MULTIPLIER.get(seed, 1.0)
+        fv = future_values.get(t, 0.0) * fv_scale * seed_mult
         team_scores[t] = ev - fv
 
     # Sort viable teams by score descending
@@ -478,32 +483,43 @@ def optimal_day_picks(
     fv_weight = 0.3
     fv_scale = (max_pair_ev / max_fv_cost) * fv_weight if max_fv_cost > 0 else 0.0
 
+    # Top seeds are scarce — extra penalty for burning them in early rounds
+    SEED_FV_MULTIPLIER = {1: 4.0, 2: 3.5, 3: 1.5}
+
     pair_scores = {}
     for pair in all_pairs:
-        fv_cost = sum(future_values.get(t, 0.0) for t in pair) * fv_scale
+        fv_cost = 0.0
+        for t in pair:
+            seed = available_teams.get(t, 8)
+            seed_mult = SEED_FV_MULTIPLIER.get(seed, 1.0)
+            fv_cost += future_values.get(t, 0.0) * fv_scale * seed_mult
         pair_scores[pair] = pair_evs[pair] - fv_cost
 
     # Sort pairs by score
     sorted_pairs = sorted(all_pairs, key=lambda p: pair_scores.get(p, 0), reverse=True)
 
-    def _portfolio_diversity_bonus(picks_list: list[list[int]]) -> float:
-        """Bonus for having picks spread across independent games.
+    def _portfolio_concentration_penalty(picks_list: list[list[int]]) -> float:
+        """Penalty for having too many entries depend on the same team.
 
-        If all entries share the same pair, one upset kills everything.
-        Reward portfolios where entries depend on different games.
+        If one team appears in all N entries, a single upset wipes out
+        the entire portfolio. Penalty scales quadratically with exposure.
         """
         if len(picks_list) <= 1:
             return 0.0
-        # Count how many entries depend on each team
         from collections import Counter
         team_counts = Counter(t for ps in picks_list for t in ps)
-        # Max possible concentration: n_entries * num_picks
-        total_slots = sum(team_counts.values())
-        # Diversity = 1 - HHI (Herfindahl index)
-        hhi = sum((c / total_slots) ** 2 for c in team_counts.values())
-        # Scale bonus to be ~10-20% of a pair's EV
+        n = len(picks_list)
         best_ev = max(pair_evs.values()) if pair_evs else 1.0
-        return (1.0 - hhi) * best_ev * 0.25
+        # Penalty: for each team, (fraction of entries exposed)^2
+        # A team on all 5 entries = (5/5)^2 = 1.0 full penalty
+        # A team on 3 of 5 = (3/5)^2 = 0.36
+        # A team on 1 of 5 = (1/5)^2 = 0.04 (negligible)
+        penalty = 0.0
+        for team_id, count in team_counts.items():
+            if count > 1:
+                exposure = count / n
+                penalty += exposure ** 2 * best_ev * 0.4
+        return penalty
 
     def _score_portfolio(picks_list: list[list[int]]) -> float:
         total_ev = sum(
@@ -517,8 +533,8 @@ def optimal_day_picks(
             sum(future_values.get(t, 0.0) for t in ps) * fv_scale
             for ps in picks_list
         )
-        diversity = _portfolio_diversity_bonus(picks_list)
-        return total_ev - fv_penalty + diversity
+        concentration = _portfolio_concentration_penalty(picks_list)
+        return total_ev - fv_penalty - concentration
 
     # Greedy assignment with soft diversity preference
     picks: list[list[int]] = []
@@ -536,7 +552,7 @@ def optimal_day_picks(
             # Penalize overlap: each additional entry on same team reduces score
             overlap_penalty = (
                 used_teams_count.get(a, 0) + used_teams_count.get(b, 0)
-            ) * pair_scores.get(sorted_pairs[0], 1.0) * 0.25
+            ) * pair_scores.get(sorted_pairs[0], 1.0) * 0.4
             score = pair_scores.get(pair, 0) - overlap_penalty
             if score > best_score:
                 best_score = score

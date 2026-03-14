@@ -61,6 +61,18 @@ def generate_picks(
     sim_cfg = config["simulation"]
     pool_size = pool_cfg["pool_size"]
     prize_pool = pool_cfg["prize_pool"]
+    max_entries_per_user = pool_cfg.get("max_entries_per_user", 150)
+
+    # Estimate field sophistication from contest structure:
+    # - Larger pools with multi-entry and higher buy-ins attract sharper players
+    # - Scale from 0.3 (casual office pool) to 0.8 (large paid multi-entry)
+    base_sophistication = pool_cfg.get("risk_tolerance", 0.5)
+    if pool_size >= 10000 and max_entries_per_user >= 50:
+        pool_sophistication = max(base_sophistication, 0.65)
+    elif pool_size >= 1000:
+        pool_sophistication = max(base_sophistication, 0.5)
+    else:
+        pool_sophistication = base_sophistication
 
     day = schedule.get_day(day_num)
     num_picks = day.num_picks
@@ -103,7 +115,7 @@ def generate_picks(
     if method == "hybrid":
         ownership = estimate_ownership_from_bracket(
             bracket, round_num, win_probs,
-            pool_sophistication=pool_cfg.get("risk_tolerance", 0.5),
+            pool_sophistication=pool_sophistication,
             method="blend",
             pool_size=pool_size,
             prize_pool=prize_pool,
@@ -120,14 +132,14 @@ def generate_picks(
     elif method == "analytical":
         ownership = estimate_ownership_from_bracket(
             bracket, round_num, win_probs,
-            pool_sophistication=1 - pool_cfg.get("risk_tolerance", 0.5),
+            pool_sophistication=pool_sophistication,
             method="heuristic",
             regions=day.regions,
         )
     else:  # differentiation
         ownership = estimate_ownership_from_bracket(
             bracket, round_num, win_probs,
-            pool_sophistication=1 - pool_cfg.get("risk_tolerance", 0.5),
+            pool_sophistication=pool_sophistication,
             method="heuristic",
             regions=day.regions,
         )
