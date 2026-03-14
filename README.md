@@ -137,7 +137,32 @@ Reading this output:
 
 Notice the gap between Heuristic and Nash ownership — Duke gets 20.5% in a casual pool but Nash says 80.5%. This gap is where your edge lives. The optimizer finds picks where Win% is high relative to how many opponents are picking that team.
 
-With 5 entries, the DP planner might recommend saving Duke for a later round (high future value) and picking Iowa St. instead (still 82.4% to win, but more expendable in future rounds).
+### Multi-Entry Pick Distribution
+
+With multiple entries, the optimizer diversifies picks across independent games so your entries don't all live or die together:
+
+```
+MULTI-ENTRY PICKS (5 entries, 100-person pool, $5,000 prize)
+===========================================================================
+  Entry    Pick                      Seed   Win%   Own%       EV
+---------------------------------------------------------------------------
+  1        ( 1) Duke                    1  90.6%  5.3%   $65.70
+  2        ( 1) Michigan                1  90.2%  5.3%   $65.45
+  3        ( 1) Arizona                 1  89.4%  5.2%   $64.83
+  4        ( 2) Florida                 2  86.1%  4.3%   $62.36
+  5        ( 1) Houston                 1  86.0%  4.8%   $62.24
+
+  Total EV:            $320.57
+  P(at least 1 alive): 100.0%
+  Unique teams:        5/5
+```
+
+Each entry gets a different team from a different game. This way:
+- If Duke loses (9.4% chance), only Entry 1 is eliminated — the other 4 survive
+- P(at least 1 survives) is effectively 100% vs. 90.6% if all 5 picked Duke
+- The DP planner may swap some entries to lower-seed picks to save top teams for later rounds
+
+The optimizer balances **total EV** against **diversification** — concentrating all entries on the highest-EV team maximizes raw EV but creates catastrophic correlation risk.
 
 ## Configuration
 

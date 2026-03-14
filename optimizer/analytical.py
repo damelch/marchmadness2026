@@ -157,6 +157,61 @@ def exact_round_ev(
     }
 
 
+def _portfolio_score(
+    picks: list[int],
+    win_probs: dict[int, float],
+    ownership: dict[int, float],
+    pool_size: int,
+    prize_pool: float,
+) -> float:
+    """Score a portfolio of picks, penalizing duplicate teams.
+
+    Raw total EV is misleading for multi-entry because putting all entries
+    on the best team gives the highest EV but zero diversification — they
+    all live or die together.
+
+    Score = total_EV * diversification_bonus
+
+    The bonus rewards spreading picks across independent games so that
+    at least one entry is likely to survive even if an upset occurs.
+    """
+    ev_result = exact_round_ev(picks, win_probs, ownership, pool_size, prize_pool)
+    total_ev = ev_result["total_ev"]
+
+    if len(picks) <= 1:
+        return total_ev
+
+    # Count how many entries share each team
+    from collections import Counter
+    counts = Counter(picks)
+    n = len(picks)
+
+    # Diversification: fraction of picks that are unique
+    unique_ratio = len(counts) / n
+
+    # Correlation penalty: entries on the same team are perfectly correlated
+    # Effective entries ≈ sum of sqrt(count) for each unique team (like portfolio theory)
+    effective_entries = sum(c ** 0.5 for c in counts.values())
+    efficiency = effective_entries / n  # 1.0 when all unique, lower with dupes
+
+    # Joint survival: P(at least one survives)
+    # With all-same picks: P = win_prob (binary)
+    # With diverse picks: P = 1 - product(1 - wp_i) (much higher)
+    p_all_die = 1.0
+    for team_id in set(picks):
+        wp = win_probs.get(team_id, 0.5)
+        k = counts[team_id]
+        p_all_die *= (1.0 - wp) ** (k > 0)  # only count once per unique team
+
+    joint_survival = 1.0 - p_all_die
+
+    # Weighted score: EV * diversification_factor
+    # The factor blends raw efficiency with survival breadth
+    div_factor = 0.5 * efficiency + 0.5 * (joint_survival ** 0.2)
+
+    return total_ev * div_factor
+
+
 def optimal_multi_entry(
     n_entries: int,
     available_teams: dict[int, int],
@@ -170,8 +225,9 @@ def optimal_multi_entry(
 ) -> list[int]:
     """Find optimal picks for N entries using exact EV with greedy + swap.
 
-    Much faster than MC-based portfolio optimization since each evaluation
-    is O(T) instead of O(sims * T).
+    Diversifies picks across entries so that entries don't all live or die
+    together. Uses portfolio scoring that rewards both high EV and spread
+    across independent games.
 
     Args:
         n_entries: Number of entries
@@ -199,9 +255,12 @@ def optimal_multi_entry(
     for t in viable:
         ev = exact_pick_ev(t, win_probs, ownership, pool_size, prize_pool, n_entries)
         fv = future_values.get(t, 0.0)
-        team_scores[t] = ev - fv  # penalize teams with high future value
+        team_scores[t] = ev - fv
 
-    # Greedy assignment
+    # Sort viable teams by score descending
+    viable_sorted = sorted(viable, key=lambda t: team_scores.get(t, 0), reverse=True)
+
+    # Greedy assignment: each entry gets a unique team
     picks = []
     used_this_round = set()
 
@@ -210,7 +269,7 @@ def optimal_multi_entry(
         best_team = None
         best_score = -float("inf")
 
-        for t in viable:
+        for t in viable_sorted:
             if t in used or t in used_this_round:
                 continue
             score = team_scores.get(t, 0)
@@ -219,22 +278,20 @@ def optimal_multi_entry(
                 best_team = t
 
         if best_team is None:
-            # Relax: allow duplicate picks across entries
-            for t in viable:
+            # All viable teams used — pick best available ignoring round constraint
+            for t in viable_sorted:
                 if t in used:
                     continue
-                score = team_scores.get(t, 0)
-                if best_team is None or score > best_score:
-                    best_score = score
-                    best_team = t
+                best_team = t
+                break
 
         if best_team is None:
-            best_team = viable[0]
+            best_team = viable_sorted[0]
 
         picks.append(best_team)
         used_this_round.add(best_team)
 
-    # Local search: pairwise swaps
+    # Local search: pairwise swaps using portfolio score (not raw EV)
     improved = True
     max_iters = 20
     iters = 0
@@ -242,20 +299,19 @@ def optimal_multi_entry(
     while improved and iters < max_iters:
         improved = False
         iters += 1
-        current_result = exact_round_ev(picks, win_probs, ownership, pool_size, prize_pool)
-        current_total = current_result["total_ev"]
+        current_score = _portfolio_score(picks, win_probs, ownership, pool_size, prize_pool)
 
         for e_idx in range(n_entries):
             used = used_teams_per_entry[e_idx]
-            for t in viable:
+            for t in viable_sorted[:30]:  # Only try top 30 teams for speed
                 if t in used or t == picks[e_idx]:
                     continue
                 trial = picks.copy()
                 trial[e_idx] = t
-                trial_result = exact_round_ev(trial, win_probs, ownership, pool_size, prize_pool)
-                if trial_result["total_ev"] > current_total * 1.001:
+                trial_score = _portfolio_score(trial, win_probs, ownership, pool_size, prize_pool)
+                if trial_score > current_score * 1.001:
                     picks[e_idx] = t
-                    current_total = trial_result["total_ev"]
+                    current_score = trial_score
                     improved = True
 
     return picks
