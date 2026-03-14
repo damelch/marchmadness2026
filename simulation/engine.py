@@ -116,6 +116,19 @@ class TournamentBracket:
                 matchups.append((slot.team_a, slot.team_b, i))
         return matchups
 
+    def get_day_matchups(
+        self, round_num: int, regions: list[str],
+    ) -> list[tuple[int | None, int | None, int]]:
+        """Get matchups for a specific contest day, filtered by region.
+
+        Returns list of (team_a, team_b, slot_index).
+        """
+        matchups = []
+        for i, slot in enumerate(self.slots):
+            if slot.round_num == round_num and slot.region in regions:
+                matchups.append((slot.team_a, slot.team_b, i))
+        return matchups
+
     def resolve_game(self, slot_index: int, winner: int) -> None:
         """Set the winner of a game and advance them to the next slot."""
         slot = self.slots[slot_index]

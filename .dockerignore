@@ -1,0 +1,7 @@
+__pycache__
+*.pyc
+*.egg-info
+.git
+.ruff_cache
+.pytest_cache
+models/saved/*.pkl

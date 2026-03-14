@@ -101,7 +101,7 @@ class TestFutureValues:
         probs = compute_round_win_probs(bracket, predict_fn, sim_results)
         adv = compute_advancement_probs(sim_results, bracket)
 
-        fv = compute_future_values(bracket, probs, adv, current_round=1)
+        fv = compute_future_values(bracket, probs, adv, current_day=1)
 
         one_seed_fv = []
         sixteen_seed_fv = []
@@ -118,7 +118,31 @@ class TestFutureValues:
         probs = compute_round_win_probs(bracket, predict_fn, sim_results)
         adv = compute_advancement_probs(sim_results, bracket)
 
-        fv = compute_future_values(bracket, probs, adv, current_round=1)
+        fv = compute_future_values(bracket, probs, adv, current_day=1)
 
         for v in fv.values():
             assert v >= 0
+
+    def test_future_values_with_schedule(self):
+        """Future values work with explicit ContestSchedule (9 days)."""
+        from contest.schedule import ContestSchedule
+        bracket, predict_fn, sim_results = _make_bracket_and_sim()
+        probs = compute_round_win_probs(bracket, predict_fn, sim_results)
+        adv = compute_advancement_probs(sim_results, bracket)
+        schedule = ContestSchedule.default()
+
+        fv = compute_future_values(bracket, probs, adv, current_day=1, schedule=schedule)
+
+        # Should still have non-negative values
+        for v in fv.values():
+            assert v >= 0
+
+        # 1-seeds should still be more valuable
+        one_seed_fv = []
+        sixteen_seed_fv = []
+        for team_id, info in bracket.teams.items():
+            if info["seed"] == 1:
+                one_seed_fv.append(fv.get(team_id, 0))
+            if info["seed"] == 16:
+                sixteen_seed_fv.append(fv.get(team_id, 0))
+        assert np.mean(one_seed_fv) > np.mean(sixteen_seed_fv)

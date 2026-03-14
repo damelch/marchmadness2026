@@ -5,6 +5,8 @@ import yaml
 import pandas as pd
 from pathlib import Path
 
+from contest.schedule import ContestSchedule
+
 
 def load_config(path="config.yaml"):
     with open(path) as f:
@@ -19,6 +21,7 @@ def main(ctx, config):
     ctx.ensure_object(dict)
     ctx.obj["config_path"] = config
     ctx.obj["config"] = load_config(config)
+    ctx.obj["schedule"] = ContestSchedule.from_config(ctx.obj["config"])
 
 
 @main.command()
@@ -118,7 +121,6 @@ def simulate(ctx):
 
     click.echo("Loading model and bracket...")
 
-    # Check if bracket exists
     bracket_path = Path("data/bracket.json")
     if not bracket_path.exists():
         click.echo("No bracket file found at data/bracket.json")
@@ -153,22 +155,51 @@ def simulate(ctx):
 
 
 @main.command()
-@click.option("--round", "round_num", type=int, required=True, help="Round number (1-6)")
+@click.pass_context
+def schedule(ctx):
+    """Show the contest day schedule."""
+    sched = ctx.obj["schedule"]
+
+    click.echo(f"\n{'='*60}")
+    click.echo("CONTEST SCHEDULE")
+    click.echo(f"{'='*60}")
+    click.echo(f"{'Day':>4}  {'Label':<20}  {'Date':<12}  {'Round':>5}  {'Picks':>5}  {'Regions'}")
+    click.echo(f"{'-'*60}")
+
+    total_picks = 0
+    for day in sched.days:
+        regions_str = ", ".join(day.regions)
+        pick_str = str(day.num_picks)
+        if day.is_double_pick:
+            pick_str += " *"
+        click.echo(
+            f"{day.day_num:>4}  {day.label:<20}  {day.date:<12}  {day.round_num:>5}  "
+            f"{pick_str:>5}  {regions_str}"
+        )
+        total_picks += day.num_picks
+
+    click.echo(f"{'-'*60}")
+    click.echo(f"Total: {sched.total_days()} days, {total_picks} picks")
+    click.echo(f"* = double-pick day (both picks must win)")
+
+
+@main.command()
+@click.option("--day", "day_num", type=int, required=True, help="Contest day number (1-9)")
 @click.option("--method", default="both", type=click.Choice(["differentiation", "portfolio", "both"]))
 @click.pass_context
-def optimize(ctx, round_num, method):
-    """Generate optimal picks for the current round."""
-    from entries.generator import generate_picks, load_config
+def optimize(ctx, day_num, method):
+    """Generate optimal picks for a contest day."""
+    from entries.generator import generate_picks
     from entries.manager import EntryManager
-    from simulation.engine import TournamentBracket
     from models.predict import Predictor
     from models.train import load_model
 
     config = ctx.obj["config"]
+    sched = ctx.obj["schedule"]
 
-    click.echo(f"Optimizing picks for Round {round_num} using {method} method...")
+    day = sched.get_day(day_num)
+    click.echo(f"Optimizing picks for Day {day_num} ({day.label}) — {day.num_picks} pick(s)...")
 
-    # Load bracket and model
     bracket_path = Path("data/bracket.json")
     if not bracket_path.exists():
         click.echo("No bracket found. Using demo bracket with seed-based probs.")
@@ -185,7 +216,6 @@ def optimize(ctx, round_num, method):
             t: info["seed"] for t, info in bracket.teams.items()
         })
 
-    # Load or create entry manager
     entry_path = Path("entries/state.json")
     if entry_path.exists():
         mgr = EntryManager.load(entry_path)
@@ -195,45 +225,53 @@ def optimize(ctx, round_num, method):
         mgr.create_entries(n)
         click.echo(f"Created {n} new entries")
 
-    results = generate_picks(bracket, predictor, mgr, round_num, config, method)
+    results = generate_picks(bracket, predictor, mgr, day_num, sched, config, method)
 
-    # Display results
-    click.echo(f"\n{'='*60}")
-    click.echo(f"PICK RECOMMENDATIONS - Round {round_num}")
-    click.echo(f"{'='*60}")
+    click.echo(f"\n{'='*70}")
+    click.echo(f"PICK RECOMMENDATIONS - Day {day_num} ({day.label})")
+    if day.is_double_pick:
+        click.echo(f"  ** Double-pick day: both picks must win to survive **")
+    click.echo(f"{'='*70}")
 
-    for entry_id, team_id in results.get("recommendations", {}).items():
-        info = bracket.teams.get(team_id, {})
-        wp = results["win_probs"].get(team_id, 0)
-        own = results["ownership"].get(team_id, 0)
-        click.echo(
-            f"  Entry {entry_id}: ({info.get('seed','?')}) {info.get('name', team_id)} "
-            f"| Win={wp:.1%} | Own={own:.1%}"
-        )
+    for entry_id, team_ids in results.get("recommendations", {}).items():
+        parts = []
+        for team_id in team_ids:
+            info = bracket.teams.get(team_id, {})
+            wp = results["win_probs"].get(team_id, 0)
+            own = results["ownership"].get(team_id, 0)
+            parts.append(
+                f"({info.get('seed', '?')}) {info.get('name', team_id)} "
+                f"Win={wp:.1%} Own={own:.1%}"
+            )
+        pick_str = " + ".join(parts)
+        click.echo(f"  Entry {entry_id}: {pick_str}")
 
-    if "differentiation" in results:
-        click.echo(results["differentiation"]["report"])
+    if "dp_analysis" in results:
+        for line in results["dp_analysis"].get("reasoning", []):
+            click.echo(f"  {line}")
 
-    if "portfolio" in results:
-        ev = results["portfolio"]["evaluation"]
+    if "evaluation" in results:
+        ev = results["evaluation"]
         click.echo(f"\nPortfolio Analysis:")
-        click.echo(f"  Total EV: ${ev['total_ev']:.2f}")
-        click.echo(f"  Joint survival: {ev['joint_survival']:.1%}")
+        click.echo(f"  Total EV: ${ev.get('total_ev', 0):.2f}")
+        if "joint_survival" in ev:
+            click.echo(f"  Joint survival: {ev['joint_survival']:.1%}")
 
 
-@main.command()
-@click.option("--round", "round_num", type=int, required=True)
+@main.command("results")
+@click.option("--day", "day_num", type=int, required=True)
 @click.argument("winners", nargs=-1, type=int)
 @click.pass_context
-def results(ctx, round_num, winners):
+def results_cmd(ctx, day_num, winners):
     """Update entries with actual results. Pass winning team IDs as arguments."""
     from entries.manager import EntryManager
 
     mgr = EntryManager.load("entries/state.json")
-    stats = mgr.update_results(round_num, set(winners))
+    stats = mgr.update_results(day_num, set(winners))
     mgr.save()
 
-    click.echo(f"\nRound {round_num} Results:")
+    day = ctx.obj["schedule"].get_day(day_num)
+    click.echo(f"\nDay {day_num} ({day.label}) Results:")
     click.echo(f"  Survived: {stats['survived']}")
     click.echo(f"  Eliminated: {stats['eliminated']}")
     click.echo(f"  Total alive: {stats['total_alive']}")

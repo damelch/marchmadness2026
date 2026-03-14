@@ -1,9 +1,11 @@
 """Exact closed-form EV calculations for survivor pool picks.
 
 Replaces Monte Carlo for single-round evaluation. Instant and exact.
+Supports both single-pick and double-pick contest days.
 """
 
 import math
+from itertools import combinations
 import numpy as np
 
 
@@ -312,6 +314,235 @@ def optimal_multi_entry(
                 if trial_score > current_score * 1.001:
                     picks[e_idx] = t
                     current_score = trial_score
+                    improved = True
+
+    return picks
+
+
+# ---------------------------------------------------------------------------
+# Double-pick day support
+# ---------------------------------------------------------------------------
+
+
+def exact_day_ev(
+    pick_set: list[int],
+    win_probs: dict[int, float],
+    ownership: dict[int, float],
+    pool_size: int,
+    prize_pool: float,
+    num_picks_per_opponent: int = 1,
+    n_our_entries: int = 1,
+    matchup_pairs: list[tuple[int, int]] | None = None,
+) -> float:
+    """Exact EV for a set of picks on a single contest day.
+
+    On a double-pick day, ALL picks must win for survival.
+
+    P(we survive) = product(P(t wins) for t in pick_set)
+
+    For opponents (who also make `num_picks_per_opponent` picks):
+    P(opp survives) ≈ field_survival_rate ^ num_picks_per_opponent
+    (simplified: each of their picks independently survives at the field rate)
+
+    For single-pick days (num_picks=1), this reduces to exact_pick_ev.
+    """
+    if len(pick_set) == 1 and num_picks_per_opponent == 1:
+        return exact_pick_ev(
+            pick_set[0], win_probs, ownership, pool_size, prize_pool, n_our_entries,
+        )
+
+    # Joint probability we survive: all our picks must win
+    p_we_survive = 1.0
+    for t in pick_set:
+        p_we_survive *= win_probs.get(t, 0.5)
+
+    if p_we_survive <= 0:
+        return 0.0
+
+    # Build opponent map for conditional independence
+    opp_map = {}
+    if matchup_pairs:
+        for a, b in matchup_pairs:
+            opp_map[a] = b
+            opp_map[b] = a
+
+    # Field survival rate per pick slot (for opponent modeling)
+    # Each opponent pick independently survives at the field rate
+    field_surv = field_survival_rate(win_probs, ownership)
+
+    # On a double-pick day, opponent must also make `num_picks_per_opponent` picks
+    # that all win. Simplified model: independent picks at field rate.
+    p_opp_survives = field_surv ** num_picks_per_opponent
+
+    n_opponents = pool_size - n_our_entries
+    expected_opp_survivors = n_opponents * p_opp_survives
+    expected_total_survivors = 1.0 + expected_opp_survivors
+
+    ev = p_we_survive * prize_pool / max(expected_total_survivors, 1.0)
+    return ev
+
+
+def _pick_set_score(
+    pick_set: list[int],
+    win_probs: dict[int, float],
+    future_values: dict[int, float],
+) -> float:
+    """Score a pick set by joint win prob minus future value cost."""
+    joint_wp = 1.0
+    fv_cost = 0.0
+    for t in pick_set:
+        joint_wp *= win_probs.get(t, 0.5)
+        fv_cost += future_values.get(t, 0.0)
+    return joint_wp - fv_cost * 0.01  # scale FV to same order
+
+
+def optimal_day_picks(
+    n_entries: int,
+    available_teams: dict[int, int],
+    win_probs: dict[int, float],
+    ownership: dict[int, float],
+    pool_size: int,
+    prize_pool: float,
+    num_picks: int = 1,
+    used_teams_per_entry: list[set[int]] | None = None,
+    min_win_prob: float = 0.3,
+    future_values: dict[int, float] | None = None,
+    matchup_pairs: list[tuple[int, int]] | None = None,
+) -> list[list[int]]:
+    """Optimal picks for N entries on a contest day (1 or 2 picks per entry).
+
+    Returns list of pick sets: [[team_a], [team_b], ...] for single-pick days,
+    or [[team_a, team_b], [team_c, team_d], ...] for double-pick days.
+    """
+    if num_picks == 1:
+        single_picks = optimal_multi_entry(
+            n_entries, available_teams, win_probs, ownership,
+            pool_size, prize_pool, used_teams_per_entry,
+            min_win_prob, future_values,
+        )
+        return [[t] for t in single_picks]
+
+    # Double-pick day optimization
+    if used_teams_per_entry is None:
+        used_teams_per_entry = [set() for _ in range(n_entries)]
+    if future_values is None:
+        future_values = {}
+
+    # Build matchup map: team -> opponent (can't pick both sides of a game)
+    opp_map = {}
+    if matchup_pairs:
+        for a, b in matchup_pairs:
+            opp_map[a] = b
+            opp_map[b] = a
+
+    # Filter viable teams
+    viable = [t for t in available_teams if win_probs.get(t, 0) >= min_win_prob]
+    if len(viable) < 2:
+        viable = list(available_teams.keys())
+
+    # Generate all valid 2-team combinations (must be from different games)
+    def valid_pair(a: int, b: int) -> bool:
+        return opp_map.get(a) != b and opp_map.get(b) != a
+
+    all_pairs = [
+        (a, b) for a, b in combinations(viable, 2)
+        if valid_pair(a, b)
+    ]
+
+    # Score each pair by EV
+    pair_scores = {}
+    for pair in all_pairs:
+        pick_set = list(pair)
+        ev = exact_day_ev(
+            pick_set, win_probs, ownership, pool_size, prize_pool,
+            num_picks_per_opponent=num_picks, n_our_entries=n_entries,
+            matchup_pairs=matchup_pairs,
+        )
+        fv_cost = sum(future_values.get(t, 0.0) for t in pick_set)
+        pair_scores[pair] = ev - fv_cost
+
+    # Sort pairs by score
+    sorted_pairs = sorted(all_pairs, key=lambda p: pair_scores.get(p, 0), reverse=True)
+
+    # Greedy assignment: each entry gets a unique pair (no shared teams across entries)
+    picks: list[list[int]] = []
+    used_this_day: set[int] = set()
+
+    for entry_idx in range(n_entries):
+        used = used_teams_per_entry[entry_idx]
+        best_pair = None
+        best_score = -float("inf")
+
+        for pair in sorted_pairs:
+            a, b = pair
+            if a in used or b in used:
+                continue
+            # Prefer pairs that don't overlap with other entries' picks this day
+            if a in used_this_day or b in used_this_day:
+                continue
+            score = pair_scores.get(pair, 0)
+            if score > best_score:
+                best_score = score
+                best_pair = pair
+
+        if best_pair is None:
+            # Relax: allow team overlap across entries
+            for pair in sorted_pairs:
+                a, b = pair
+                if a in used or b in used:
+                    continue
+                best_pair = pair
+                break
+
+        if best_pair is None:
+            # Last resort: pick the best pair ignoring all constraints
+            best_pair = sorted_pairs[0] if sorted_pairs else (viable[0], viable[1])
+
+        picks.append(list(best_pair))
+        used_this_day.update(best_pair)
+
+    # Local search: swap pairs to improve portfolio
+    improved = True
+    max_iters = 15
+    iters = 0
+
+    while improved and iters < max_iters:
+        improved = False
+        iters += 1
+
+        # Score current portfolio
+        flat_picks = [t for pick_set in picks for t in pick_set]
+        current_total_ev = sum(
+            exact_day_ev(
+                ps, win_probs, ownership, pool_size, prize_pool,
+                num_picks, n_our_entries=n_entries, matchup_pairs=matchup_pairs,
+            )
+            for ps in picks
+        )
+
+        for e_idx in range(n_entries):
+            used = used_teams_per_entry[e_idx]
+            for pair in sorted_pairs[:20]:
+                a, b = pair
+                if a in used or b in used:
+                    continue
+                if list(pair) == picks[e_idx]:
+                    continue
+
+                trial = [ps[:] for ps in picks]
+                trial[e_idx] = list(pair)
+
+                trial_ev = sum(
+                    exact_day_ev(
+                        ps, win_probs, ownership, pool_size, prize_pool,
+                        num_picks, n_our_entries=n_entries, matchup_pairs=matchup_pairs,
+                    )
+                    for ps in trial
+                )
+
+                if trial_ev > current_total_ev * 1.001:
+                    picks[e_idx] = list(pair)
+                    current_total_ev = trial_ev
                     improved = True
 
     return picks

@@ -1,13 +1,15 @@
 """Dynamic programming for multi-round survivor pool planning.
 
 Computes future value of each team to decide whether to use them now
-or save them for later rounds where they may be more valuable.
+or save them for later days where they may be more valuable.
+
+Updated to work with day-based contest schedule (9 days, 12 picks).
 """
 
 import math
 import numpy as np
 from simulation.engine import TournamentBracket
-from optimizer.analytical import exact_pick_ev
+from optimizer.analytical import exact_pick_ev, exact_day_ev
 
 
 def compute_round_win_probs(
@@ -100,13 +102,6 @@ def team_scarcity(
 
     Scarcity = 1 / (number of viable alternatives with similar or better EV)
     High scarcity = few alternatives = more valuable to save.
-
-    Args:
-        team_id: Team to evaluate
-        round_num: Round to evaluate for
-        available_teams_by_round: Which teams play in each round
-        round_win_probs: Win probabilities per round
-        min_prob: Minimum viable win probability
     """
     probs = round_win_probs.get(round_num, {})
     team_wp = probs.get(team_id, 0)
@@ -122,7 +117,6 @@ def team_scarcity(
         return 1.0  # Only option
 
     # Scarcity based on relative strength
-    # A team that's much better than alternatives is scarcer
     alt_probs = sorted(
         [probs.get(t, 0) for t in available if t != team_id and probs.get(t, 0) >= min_prob],
         reverse=True,
@@ -131,13 +125,11 @@ def team_scarcity(
     if not alt_probs:
         return 1.0
 
-    # How much better is this team than the best alternative?
     best_alt = alt_probs[0]
     advantage = team_wp - best_alt
 
-    # Scarcity: high if few alternatives, higher if we're much better
     base_scarcity = 1.0 / n_viable
-    advantage_bonus = max(0, advantage) * 2  # 10% better = 0.2 bonus
+    advantage_bonus = max(0, advantage) * 2
 
     return min(base_scarcity + advantage_bonus, 1.0)
 
@@ -146,31 +138,41 @@ def compute_future_values(
     bracket: TournamentBracket,
     round_win_probs: dict[int, dict[int, float]],
     adv_probs: dict[int, dict[int, float]],
-    current_round: int,
+    current_day: int,
+    schedule=None,
     ownership_by_round: dict[int, dict[int, float]] | None = None,
     pool_size: int = 100,
     prize_pool: float = 5000,
-    total_rounds: int = 6,
     discount: float = 0.85,
 ) -> dict[int, float]:
-    """Compute future value of each team across remaining rounds.
+    """Compute future value of each team across remaining contest days.
 
     Future value represents the opportunity cost of using a team now:
-    if we use them now, we can't use them in a future round where they
+    if we use them now, we can't use them in a future day where they
     might be more valuable (scarcer, higher leverage).
 
-    Uses backward induction:
-        FV[t] = sum over future rounds r:
-            P(t reaches r) * scarcity(t, r) * EV_contribution(t, r) * discount^(r - current)
+    Uses backward induction over contest days (not rounds).
 
-    Returns:
-        Dict of team_id -> future_value (higher = save for later)
+    Args:
+        bracket: Tournament bracket
+        round_win_probs: round_num -> {team_id -> P(win)}
+        adv_probs: team_id -> {round_num -> P(reaches)}
+        current_day: Current contest day number
+        schedule: ContestSchedule instance (uses default if None)
+        ownership_by_round: Optional ownership per round
+        pool_size: Pool size
+        prize_pool: Prize money
+        discount: Discount factor per day
     """
+    if schedule is None:
+        from contest.schedule import ContestSchedule
+        schedule = ContestSchedule.default()
+
     all_teams = list(bracket.teams.keys())
 
-    # Build available teams by round (teams that play in each round)
+    # Build available teams by round
     available_by_round = {}
-    for r in range(1, total_rounds + 1):
+    for r in range(1, 7):
         matchups = bracket.get_round_matchups(r)
         teams_in_round = set()
         for a, b, _ in matchups:
@@ -181,41 +183,52 @@ def compute_future_values(
         available_by_round[r] = list(teams_in_round)
 
     future_values = {}
+    remaining_days = schedule.get_remaining_days(current_day)
 
     for team_id in all_teams:
         fv = 0.0
-        for future_round in range(current_round + 1, total_rounds + 1):
+        for day_idx, future_day in enumerate(remaining_days):
+            r = future_day.round_num
+
             # P(team reaches this round)
-            p_reaches = adv_probs.get(team_id, {}).get(future_round, 0)
+            p_reaches = adv_probs.get(team_id, {}).get(r, 0)
             if p_reaches < 0.01:
                 continue
 
             # Win probability in that round
-            wp = round_win_probs.get(future_round, {}).get(team_id, 0)
+            wp = round_win_probs.get(r, {}).get(team_id, 0)
             if wp < 0.1:
                 continue
 
+            # Check team plays in this day's regions
+            team_region = bracket.teams.get(team_id, {}).get("region", "")
+            if team_region and team_region not in future_day.regions and r <= 4:
+                continue  # Team's region not on this day
+
             # Scarcity in that round
             scar = team_scarcity(
-                team_id, future_round, available_by_round, round_win_probs
+                team_id, r, available_by_round, round_win_probs
             )
 
-            # EV contribution estimate
-            if ownership_by_round and future_round in ownership_by_round:
-                own = ownership_by_round[future_round]
+            # On double-pick days, teams are more valuable because you
+            # need 2 viable picks (scarcer resource)
+            if future_day.is_double_pick:
+                scar = min(scar * 1.3, 1.0)
+
+            # Ownership estimate
+            if ownership_by_round and r in ownership_by_round:
+                own = ownership_by_round[r]
             else:
-                # Rough estimate: ownership proportional to win prob
-                own = {t: round_win_probs.get(future_round, {}).get(t, 0.5)
-                       for t in available_by_round.get(future_round, [])}
+                own = {t: round_win_probs.get(r, {}).get(t, 0.5)
+                       for t in available_by_round.get(r, [])}
                 total_own = sum(own.values())
                 if total_own > 0:
                     own = {t: v / total_own for t, v in own.items()}
 
-            ev = exact_pick_ev(team_id, round_win_probs.get(future_round, {}),
+            ev = exact_pick_ev(team_id, round_win_probs.get(r, {}),
                                own, pool_size, prize_pool)
 
-            # Weighted future value
-            d = discount ** (future_round - current_round)
+            d = discount ** (day_idx + 1)
             fv += p_reaches * scar * ev * d
 
         future_values[team_id] = fv
@@ -231,66 +244,103 @@ def dp_optimal_picks(
     ownership: dict[int, float],
     pool_size: int,
     prize_pool: float,
-    current_round: int,
+    current_day: int,
+    schedule=None,
     used_teams_per_entry: list[set[int]] | None = None,
     min_win_prob: float = 0.3,
+    num_picks: int = 1,
+    matchup_pairs: list[tuple[int, int]] | None = None,
 ) -> dict:
-    """Generate optimal picks considering future rounds via DP.
+    """Generate optimal picks considering future days via DP.
+
+    Args:
+        current_day: Contest day number (1-9)
+        schedule: ContestSchedule instance
+        num_picks: Picks required this day (1 or 2)
+        matchup_pairs: Game matchups for this day
 
     Returns:
-        Dict with picks, future_values, adjusted_evs, reasoning
+        Dict with picks (list of pick sets), future_values, reasoning
     """
-    from optimizer.analytical import optimal_multi_entry
+    from optimizer.analytical import optimal_day_picks
+
+    if schedule is None:
+        from contest.schedule import ContestSchedule
+        schedule = ContestSchedule.default()
+
+    # Map day to round for win probs
+    day = schedule.get_day(current_day)
+    round_num = day.round_num
 
     # Compute future values
     future_vals = compute_future_values(
-        bracket, round_win_probs, adv_probs, current_round,
+        bracket, round_win_probs, adv_probs, current_day,
+        schedule=schedule,
         pool_size=pool_size, prize_pool=prize_pool,
     )
 
-    # Get current round teams
-    matchups = bracket.get_round_matchups(current_round)
+    # Get available teams for this day (filtered by region)
+    matchups = bracket.get_day_matchups(round_num, day.regions)
     available = {}
-    current_win_probs = round_win_probs.get(current_round, {})
+    current_win_probs = round_win_probs.get(round_num, {})
     for a, b, _ in matchups:
         if a and a in bracket.teams:
             available[a] = bracket.teams[a]["seed"]
         if b and b in bracket.teams:
             available[b] = bracket.teams[b]["seed"]
 
+    if matchup_pairs is None:
+        matchup_pairs = [(a, b) for a, b, _ in matchups if a and b]
+
     # Optimize with future value adjustment
-    picks = optimal_multi_entry(
+    picks = optimal_day_picks(
         n_entries, available, current_win_probs, ownership,
-        pool_size, prize_pool, used_teams_per_entry,
-        min_win_prob, future_vals,
+        pool_size, prize_pool, num_picks,
+        used_teams_per_entry, min_win_prob, future_vals, matchup_pairs,
     )
 
     # Also compute picks WITHOUT future value for comparison
-    picks_no_fv = optimal_multi_entry(
+    picks_no_fv = optimal_day_picks(
         n_entries, available, current_win_probs, ownership,
-        pool_size, prize_pool, used_teams_per_entry,
-        min_win_prob, None,
+        pool_size, prize_pool, num_picks,
+        used_teams_per_entry, min_win_prob, None, matchup_pairs,
     )
 
     # Build reasoning
     reasoning = []
-    for i, (pick, pick_nofv) in enumerate(zip(picks, picks_no_fv)):
-        fv = future_vals.get(pick, 0)
-        ev = exact_pick_ev(pick, current_win_probs, ownership, pool_size, prize_pool, n_entries)
-        info = bracket.teams.get(pick, {})
+    for i, (pick_set, pick_set_nofv) in enumerate(zip(picks, picks_no_fv)):
+        names = []
+        for t in pick_set:
+            info = bracket.teams.get(t, {})
+            names.append(f"({info.get('seed', '?')}) {info.get('name', t)}")
+        pick_str = " + ".join(names)
 
-        if pick != pick_nofv:
-            nofv_info = bracket.teams.get(pick_nofv, {})
-            nofv_fv = future_vals.get(pick_nofv, 0)
+        fv_total = sum(future_vals.get(t, 0) for t in pick_set)
+
+        if num_picks == 1:
+            ev = exact_pick_ev(
+                pick_set[0], current_win_probs, ownership, pool_size, prize_pool, n_entries,
+            )
+        else:
+            ev = exact_day_ev(
+                pick_set, current_win_probs, ownership, pool_size, prize_pool,
+                num_picks_per_opponent=num_picks, n_our_entries=n_entries,
+                matchup_pairs=matchup_pairs,
+            )
+
+        if pick_set != pick_set_nofv:
+            nofv_names = []
+            for t in pick_set_nofv:
+                info = bracket.teams.get(t, {})
+                nofv_names.append(f"({info.get('seed', '?')}) {info.get('name', t)}")
+            nofv_str = " + ".join(nofv_names)
             reasoning.append(
-                f"Entry {i+1}: Switched from ({nofv_info.get('seed','?')}) {nofv_info.get('name',pick_nofv)} "
-                f"(FV={nofv_fv:.2f}) to ({info.get('seed','?')}) {info.get('name',pick)} "
-                f"(FV={fv:.2f}) — saving the higher-FV team for later"
+                f"Entry {i+1}: Switched from {nofv_str} to {pick_str} "
+                f"(FV={fv_total:.2f}) — saving higher-FV teams for later"
             )
         else:
             reasoning.append(
-                f"Entry {i+1}: ({info.get('seed','?')}) {info.get('name',pick)} "
-                f"(EV=${ev:.2f}, FV={fv:.2f})"
+                f"Entry {i+1}: {pick_str} (EV=${ev:.2f}, FV={fv_total:.2f})"
             )
 
     return {

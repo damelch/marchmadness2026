@@ -3,38 +3,43 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
 @dataclass
 class Entry:
     entry_id: int
-    picks: dict[int, int] = field(default_factory=dict)  # round_num -> team_id
+    picks: dict[int, list[int]] = field(default_factory=dict)  # day_num -> [team_ids]
     used_teams: set[int] = field(default_factory=set)
     alive: bool = True
-    eliminated_round: int | None = None
+    eliminated_day: int | None = None
 
-    def add_pick(self, round_num: int, team_id: int, reuse_allowed: bool = False) -> None:
-        if not reuse_allowed and team_id in self.used_teams:
-            raise ValueError(
-                f"Entry {self.entry_id}: Team {team_id} already used in a prior round"
-            )
-        self.picks[round_num] = team_id
-        self.used_teams.add(team_id)
+    def add_picks(
+        self, day_num: int, team_ids: list[int], reuse_allowed: bool = False,
+    ) -> None:
+        """Record picks for a contest day (1 or 2 teams)."""
+        if not reuse_allowed:
+            for t in team_ids:
+                if t in self.used_teams:
+                    raise ValueError(
+                        f"Entry {self.entry_id}: Team {t} already used on a prior day"
+                    )
+        self.picks[day_num] = list(team_ids)
+        self.used_teams.update(team_ids)
 
-    def check_result(self, round_num: int, winners: set[int]) -> bool:
-        """Check if this entry survived a round. Returns True if survived."""
+    def check_day_result(self, day_num: int, winners: set[int]) -> bool:
+        """Check if this entry survived a day. ALL picks must win."""
         if not self.alive:
             return False
-        pick = self.picks.get(round_num)
-        if pick is None:
-            return True  # No pick yet for this round
-        if pick not in winners:
-            self.alive = False
-            self.eliminated_round = round_num
-            return False
-        return True
+        day_picks = self.picks.get(day_num)
+        if day_picks is None:
+            return True  # No picks yet for this day
+        if all(t in winners for t in day_picks):
+            return True
+        self.alive = False
+        self.eliminated_day = day_num
+        return False
 
     def to_dict(self) -> dict:
         return {
@@ -42,17 +47,29 @@ class Entry:
             "picks": {str(k): v for k, v in self.picks.items()},
             "used_teams": list(self.used_teams),
             "alive": self.alive,
-            "eliminated_round": self.eliminated_round,
+            "eliminated_day": self.eliminated_day,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> Entry:
+        raw_picks = d.get("picks", {})
+        picks = {}
+        for k, v in raw_picks.items():
+            day = int(k)
+            # Migration: old format stored {round: team_id} as int values
+            if isinstance(v, int):
+                picks[day] = [v]
+            else:
+                picks[day] = list(v)
+
+        used_teams = set(d.get("used_teams", []))
+
         return cls(
             entry_id=d["entry_id"],
-            picks={int(k): v for k, v in d["picks"].items()},
-            used_teams=set(d["used_teams"]),
-            alive=d["alive"],
-            eliminated_round=d.get("eliminated_round"),
+            picks=picks,
+            used_teams=used_teams,
+            alive=d.get("alive", True),
+            eliminated_day=d.get("eliminated_day", d.get("eliminated_round")),
         )
 
 
@@ -70,15 +87,17 @@ class EntryManager:
         self.entries.extend(new_entries)
         return new_entries
 
-    def add_pick(self, entry_id: int, round_num: int, team_id: int) -> None:
-        """Record a pick for an entry."""
+    def add_picks(
+        self, entry_id: int, day_num: int, team_ids: list[int],
+    ) -> None:
+        """Record picks for an entry on a contest day."""
         entry = self._get_entry(entry_id)
         if not entry.alive:
             raise ValueError(f"Entry {entry_id} is eliminated")
-        entry.add_pick(round_num, team_id, self.reuse_allowed)
+        entry.add_picks(day_num, team_ids, self.reuse_allowed)
 
-    def update_results(self, round_num: int, winners: set[int]) -> dict:
-        """Update all entries with round results.
+    def update_results(self, day_num: int, winners: set[int]) -> dict:
+        """Update all entries with day results.
 
         Returns dict with survival stats.
         """
@@ -90,13 +109,13 @@ class EntryManager:
             if not entry.alive:
                 already_dead += 1
                 continue
-            if entry.check_result(round_num, winners):
+            if entry.check_day_result(day_num, winners):
                 survived += 1
             else:
                 eliminated += 1
 
         return {
-            "round": round_num,
+            "day": day_num,
             "survived": survived,
             "eliminated": eliminated,
             "already_dead": already_dead,
@@ -107,7 +126,7 @@ class EntryManager:
         return [e for e in self.entries if e.alive]
 
     def get_available_teams(
-        self, entry_id: int, teams_playing: set[int]
+        self, entry_id: int, teams_playing: set[int],
     ) -> set[int]:
         """Get teams this entry can still pick (playing and not yet used)."""
         entry = self._get_entry(entry_id)
@@ -121,10 +140,13 @@ class EntryManager:
         for entry in self.entries:
             row = {
                 "Entry": entry.entry_id,
-                "Status": "ALIVE" if entry.alive else f"OUT (R{entry.eliminated_round})",
+                "Status": "ALIVE" if entry.alive else f"OUT (Day {entry.eliminated_day})",
             }
-            for r, team in sorted(entry.picks.items()):
-                row[f"Round {r}"] = team
+            for day, teams in sorted(entry.picks.items()):
+                if len(teams) == 1:
+                    row[f"Day {day}"] = teams[0]
+                else:
+                    row[f"Day {day}"] = ", ".join(str(t) for t in teams)
             rows.append(row)
         return rows
 
@@ -132,6 +154,7 @@ class EntryManager:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         data = {
+            "version": 2,
             "reuse_allowed": self.reuse_allowed,
             "entries": [e.to_dict() for e in self.entries],
         }
