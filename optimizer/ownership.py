@@ -1,4 +1,10 @@
-"""Estimate public ownership percentages for survivor pool picks."""
+"""Estimate public ownership percentages for survivor pool picks.
+
+Supports three methods:
+- "heuristic": Seed-based popularity model (fast, good for casual pools)
+- "nash": Game-theoretic Nash equilibrium (optimal for sharp pools)
+- "blend": Weighted combination based on pool sophistication
+"""
 
 import numpy as np
 from simulation.engine import TournamentBracket
@@ -31,7 +37,7 @@ def estimate_ownership(
     round_num: int,
     pool_sophistication: float = 0.5,
 ) -> dict[int, float]:
-    """Estimate what fraction of the pool will pick each team.
+    """Estimate what fraction of the pool will pick each team (heuristic model).
 
     Args:
         available_teams: team_id -> seed for teams playing this round
@@ -70,11 +76,45 @@ def estimate_ownership(
     return {t: v / total for t, v in raw_ownership.items()}
 
 
+def get_ownership(
+    available_teams: dict[int, int],
+    win_probs: dict[int, float],
+    round_num: int,
+    pool_size: int = 100,
+    prize_pool: float = 5000,
+    pool_sophistication: float = 0.5,
+    method: str = "blend",
+) -> dict[int, float]:
+    """Get ownership estimates using the specified method.
+
+    Args:
+        method: "heuristic", "nash", or "blend"
+        pool_sophistication: For blend, controls mix (0=all heuristic, 1=all Nash)
+    """
+    if method == "heuristic":
+        return estimate_ownership(available_teams, win_probs, round_num, pool_sophistication)
+
+    if method == "nash":
+        from optimizer.nash import nash_equilibrium
+        return nash_equilibrium(win_probs, pool_size, prize_pool)
+
+    # Blend: weighted combination
+    from optimizer.nash import blended_ownership
+    heuristic = estimate_ownership(available_teams, win_probs, round_num, pool_sophistication)
+    return blended_ownership(
+        win_probs, pool_size, prize_pool, heuristic,
+        field_efficiency=pool_sophistication,
+    )
+
+
 def estimate_ownership_from_bracket(
     bracket: TournamentBracket,
     round_num: int,
     win_probs: dict[int, float],
     pool_sophistication: float = 0.5,
+    method: str = "blend",
+    pool_size: int = 100,
+    prize_pool: float = 5000,
 ) -> dict[int, float]:
     """Convenience function: estimate ownership from bracket structure."""
     matchups = bracket.get_round_matchups(round_num)
@@ -85,4 +125,7 @@ def estimate_ownership_from_bracket(
         if team_b and team_b in bracket.teams:
             available[team_b] = bracket.teams[team_b]["seed"]
 
-    return estimate_ownership(available, win_probs, round_num, pool_sophistication)
+    return get_ownership(
+        available, win_probs, round_num, pool_size, prize_pool,
+        pool_sophistication, method,
+    )
