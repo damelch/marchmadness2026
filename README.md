@@ -19,7 +19,7 @@ marchmadness evaluate        # Verify calibration
 # After Selection Sunday — optimize picks
 marchmadness simulate        # Monte Carlo advancement probabilities
 marchmadness schedule        # View the 9-day contest schedule
-marchmadness optimize --day 1 --method both
+marchmadness optimize --day 1 --method hybrid
 
 # During tournament
 marchmadness results --day 1 <winning_team_ids>
@@ -37,17 +37,35 @@ docker build -t marchmadness .
 
 # Run any command
 docker run --rm marchmadness schedule
-docker run --rm marchmadness optimize --day 1 --method both
-
-# Mount volumes for persistent data and config
 docker run --rm \
   -v $(pwd)/data:/app/data \
   -v $(pwd)/config.yaml:/app/config.yaml \
   -v $(pwd)/entries:/app/entries \
-  marchmadness optimize --day 1
+  marchmadness optimize --day 1 --method hybrid
 
-# Interactive shell
-docker run --rm -it --entrypoint bash marchmadness
+# Override pool settings on the fly (defaults: 10k pool, 150 max/user)
+docker run --rm \
+  -v $(pwd)/data:/app/data \
+  -v $(pwd)/config.yaml:/app/config.yaml \
+  -v $(pwd)/entries:/app/entries \
+  marchmadness optimize --day 1 --pool-size 22000 --num-entries 5 --max-entries 150
+
+# Run tests
+docker run --rm --entrypoint pytest marchmadness -v
+```
+
+Or use the Makefile:
+
+```bash
+make build                  # Build Docker image
+make test                   # Run 111 tests
+make simulate               # 50k Monte Carlo sims
+make optimize-day1          # Day 1 picks (uses config.yaml)
+make optimize-day2          # Day 2 picks
+make optimize-all           # Both R64 days
+
+# Override pool settings
+make optimize-day1 POOL_SIZE=22000 NUM_ENTRIES=5 MAX_ENTRIES=150
 ```
 
 The Docker image uses Python 3.12 and includes all dependencies. Mount your `data/`, `entries/`, and `config.yaml` to persist state between runs.
@@ -114,7 +132,7 @@ For each team, computes:
 - `scarcity` = how many viable alternatives exist in each future day (double-pick days get extra weight)
 - Adjusted EV = current_day_EV - future_value_penalty
 
-The result: picks that balance safety now against optionality later.
+Top seeds (1 and 2) get extra preservation multipliers — they're irreplaceable in later rounds when the field thins out. The optimizer strongly prefers burning 3-7 seeds in the Round of 64 and banking 1-seeds for Elite 8 and beyond.
 
 **Monte Carlo simulation** (50k runs) is used only for computing `P(team reaches round R)` — it captures tournament structure correlations (e.g., two 1-seeds in the same region can't both make the Final Four). All other math is exact.
 
@@ -122,73 +140,44 @@ The result: picks that balance safety now against optionality later.
 
 Three modes:
 
-- **Heuristic** — Seed-based popularity bias for casual pools (1-seeds get picked ~50% of the time, 16-seeds ~1%)
+- **Heuristic** — Seed-based popularity bias for casual pools (1-seeds get picked ~30-40% of the time, 16-seeds <1%)
 - **Nash** — Mathematically optimal ownership for sharp pools
 - **Blend** — Weighted mix controlled by `pool_sophistication` parameter (recommended)
 
+Field sophistication is auto-estimated from contest structure: large paid multi-entry contests (22k entries, 150 max/user) get higher sophistication than a 100-person office pool.
+
+### Portfolio Diversification
+
+With multiple entries, the optimizer spreads picks across independent games with a **concentration penalty** — if one team appears in too many entries, a single upset wipes out the entire portfolio. The penalty scales quadratically with exposure, so the optimizer naturally produces varied picks across entries.
+
 ## Example Output
 
-Sample optimizer output for one region (8 games), using KenPom 2026 ratings with a 100-entry pool and $5,000 prize:
-
 ```
-OPTIMIZER OUTPUT - Round 1 (sample region)
-===========================================================================
-Team                 Seed   Win%  Heur Own  Nash Own       EV
----------------------------------------------------------------------------
-Duke                    1 90.6%    20.5%    80.5%  $  59.88  <--
-Florida                 2 86.1%    16.6%    19.5%  $  56.65  <--
-Iowa St.                3 82.4%    13.9%     0.0%  $  54.16  <--
-Gonzaga                 4 74.4%    10.9%     0.0%  $  48.77  <--
-Alabama                 5 68.3%     8.5%     0.0%  $  44.96
-Kansas                  6 65.5%     7.8%     0.0%  $  43.20
-Iowa                    7 57.3%     5.7%     0.0%  $  38.22
-Auburn                  8 52.3%     4.6%     0.0%  $  35.24
-Kentucky                9 47.7%     3.7%     0.0%  $  32.60
-Missouri               10 42.7%     2.9%     0.0%  $  29.64
-Northwestern           11 34.5%     1.8%     0.0%  $  24.73
-Pittsburgh             12 31.7%     1.5%     0.0%  $  23.01
-Drake                  13 25.6%     0.9%     0.0%  $  19.31
-Colorado               14 17.6%     0.4%     0.0%  $  14.04
-Boise St.              15 13.9%     0.2%     0.0%  $  11.66
-Akron                  16  9.4%     0.1%     0.0%  $   8.52
+======================================================================
+PICK RECOMMENDATIONS - Day 1 (R64 Thursday)
+  Pool: 22,000 entries | Prize: $3,000,000 | Max/user: 150
+  ** Double-pick day: both picks must win to survive **
+======================================================================
+  Entry 0: (3) Iowa St. Win=93.6% Own=2.0% + (3) Purdue Win=85.2% Own=1.8%
+  Entry 1: (4) Kansas Win=89.0% Own=1.7% + (2) Connecticut Win=96.0% Own=3.0%
+  Entry 2: (6) Louisville Win=85.0% Own=1.5% + (2) Connecticut Win=96.0% Own=3.0%
+  Entry 3: (2) Illinois Win=88.2% Own=2.1% + (10) Ohio St. Win=86.4% Own=1.5%
+  Entry 4: (3) Iowa St. Win=93.6% Own=2.0% + (2) Connecticut Win=96.0% Own=3.0%
+  Entry 1: Switched from (1) Duke + (1) Florida to (3) Iowa St. + (3) Purdue
+           (FV=2202724.42) — saving higher-FV teams for later
+
+Portfolio Analysis:
+  Total EV: $663.51
+  Joint survival: 100.0%
 ```
 
 Reading this output:
+- **Win** — KenPom-derived probability of winning the game
+- **Own** — Estimated % of the field picking this team
+- **FV** — Future value of the teams that were swapped out (why the DP planner saved them)
+- **Switched from** — Shows which "obvious" picks (1-seeds) the DP planner replaced with mid-seeds to preserve top seeds for later rounds
 
-- **Win%** — KenPom-derived probability of winning the round
-- **Heur Own** — Estimated % of the field picking this team (casual pool model)
-- **Nash Own** — Game-theoretically optimal ownership (what a sharp pool would do)
-- **EV** — Expected value of picking this team given pool size, prize, and field behavior
-- **`<--`** — Recommended picks (highest EV)
-
-Notice the gap between Heuristic and Nash ownership — Duke gets 20.5% in a casual pool but Nash says 80.5%. This gap is where your edge lives. The optimizer finds picks where Win% is high relative to how many opponents are picking that team.
-
-### Multi-Entry Pick Distribution
-
-With multiple entries, the optimizer diversifies picks across independent games so your entries don't all live or die together:
-
-```
-MULTI-ENTRY PICKS (5 entries, 100-person pool, $5,000 prize)
-===========================================================================
-  Entry    Pick                      Seed   Win%   Own%       EV
----------------------------------------------------------------------------
-  1        ( 1) Duke                    1  90.6%  5.3%   $65.70
-  2        ( 1) Michigan                1  90.2%  5.3%   $65.45
-  3        ( 1) Arizona                 1  89.4%  5.2%   $64.83
-  4        ( 2) Florida                 2  86.1%  4.3%   $62.36
-  5        ( 1) Houston                 1  86.0%  4.8%   $62.24
-
-  Total EV:            $320.57
-  P(at least 1 alive): 100.0%
-  Unique teams:        5/5
-```
-
-Each entry gets a different team from a different game. This way:
-- If Duke loses (9.4% chance), only Entry 1 is eliminated — the other 4 survive
-- P(at least 1 survives) is effectively 100% vs. 90.6% if all 5 picked Duke
-- The DP planner may swap some entries to lower-seed picks to save top teams for later rounds
-
-The optimizer balances **total EV** against **diversification** — concentrating all entries on the highest-EV team maximizes raw EV but creates catastrophic correlation risk.
+Key strategy: all four 1-seeds (Duke, Florida, Michigan, Arizona) are banked for later rounds. The optimizer uses 3-7 seeds with 85-93% win probability and only 1-3% ownership — high leverage against a field that's piling on the chalk.
 
 ## Contest Schedule
 
@@ -217,10 +206,12 @@ Edit `config.yaml`:
 ```yaml
 pool:
   num_entries: 5          # How many entries you're buying
-  pool_size: 100          # Total entries in the pool
-  prize_pool: 5000        # Total prize money
-  entry_cost: 50          # Cost per entry
-  risk_tolerance: 0.5     # 0=conservative, 1=aggressive
+  pool_size: 22000        # Total entries in the pool (CLI: --pool-size)
+  prize_pool: 3000000     # Total prize money
+  entry_cost: 150         # Cost per entry
+  risk_tolerance: 0.7     # 0=conservative, 1=aggressive
+  max_entries_per_user: 150  # Max entries allowed per user (CLI: --max-entries)
+  payout_structure: "winner_take_all"
   rules:
     reuse_allowed: false   # Can't pick same team twice across days
 
@@ -229,6 +220,10 @@ model:
                           # randomforest, naivebayes, ensemble, stacked
   calibrate: true         # Isotonic calibration for base models
 ```
+
+CLI flags override config values: `--pool-size 22000 --num-entries 5 --max-entries 150`
+
+Defaults when nothing is specified: pool size = 10,000, max entries = 150.
 
 ## Bracket Setup
 
@@ -252,6 +247,7 @@ marchmadness2026/
 ├── cli.py                     # CLI commands (day-based)
 ├── config.yaml                # Pool, model, and contest schedule settings
 ├── Dockerfile                 # Docker containerization
+├── Makefile                   # Docker build/test/optimize shortcuts
 ├── contest/
 │   └── schedule.py            # Day-based contest schedule (9 days, 12 picks)
 ├── data/
@@ -261,7 +257,8 @@ marchmadness2026/
 │   ├── feature_engineering.py # KenPom-style features from box scores
 │   ├── seed_history.py        # Historical seed-vs-seed win rates
 │   ├── kenpom.py              # KenPom ratings integration
-│   └── kenpom_2026.csv        # 2026 KenPom ratings (365 teams)
+│   ├── kenpom_2026.csv        # 2026 KenPom ratings (365 teams)
+│   └── bracket.json           # Tournament bracket (64 teams)
 ├── models/
 │   ├── train.py               # Logistic, XGBoost, LightGBM, CatBoost, RF, NB, Stacked Ensemble
 │   ├── predict.py             # Win probability predictor
@@ -281,13 +278,19 @@ marchmadness2026/
 ├── entries/
 │   ├── manager.py             # Track picks and eliminations (day-based)
 │   └── generator.py           # Full optimization pipeline
-└── tests/                     # Test suite
+└── tests/                     # Test suite (111 tests)
 ```
 
 ## Tests
 
 ```bash
 pytest tests/ -v
+# or
+make test
 ```
 
 111 tests covering model training (all 8 model types including stacked ensemble pickle round-trip), bracket simulation, analytical EV math, Nash equilibrium convergence, DP future values, and KenPom integration.
+
+## License
+
+Apache 2.0 — see [LICENSE](LICENSE).
