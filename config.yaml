@@ -1,0 +1,53 @@
+pool:
+  num_entries: 5
+  pool_size: 100
+  prize_pool: 5000
+  entry_cost: 50
+  risk_tolerance: 0.5  # 0=conservative, 1=aggressive
+  rules:
+    reuse_allowed: false  # can't pick same team twice across rounds
+
+tournament:
+  year: 2026
+  schedule:
+    round_of_64:
+      - "2026-03-19"
+      - "2026-03-20"
+    round_of_32:
+      - "2026-03-21"
+      - "2026-03-22"
+    sweet_16:
+      - "2026-03-26"
+      - "2026-03-27"
+    elite_8:
+      - "2026-03-30"
+    final_four:
+      - "2026-04-04"
+    championship:
+      - "2026-04-06"
+
+model:
+  type: "xgboost"  # "logistic", "xgboost", "ensemble"
+  calibrate: true
+  historical_seasons:
+    - 2013
+    - 2014
+    - 2015
+    - 2016
+    - 2017
+    - 2018
+    - 2019
+    # 2020 skipped - no tournament
+    - 2021
+    - 2022
+    - 2023
+    - 2024
+    - 2025
+
+simulation:
+  num_sims: 50000
+  seed: 42
+
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"

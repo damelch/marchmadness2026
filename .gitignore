@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+models/saved/*.pkl
+data/raw/*.csv
+data/raw/*.zip
+data/processed/*.parquet
+entries/state.json
+.ruff_cache/

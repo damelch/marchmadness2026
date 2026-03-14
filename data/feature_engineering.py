@@ -1,0 +1,322 @@
+"""Build matchup features for win probability modeling."""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+from data.seed_history import parse_seed
+
+
+def compute_possessions(row: pd.Series, prefix: str) -> float:
+    """Estimate possessions from box score stats."""
+    fga = row[f"{prefix}FGA"]
+    ora = row[f"{prefix}OR"]
+    to = row[f"{prefix}TO"]
+    fta = row[f"{prefix}FTA"]
+    return fga - ora + to + 0.475 * fta
+
+
+def compute_team_stats(detailed_results: pd.DataFrame, season: int) -> pd.DataFrame:
+    """Compute per-team season statistics from detailed results.
+
+    Returns DataFrame with columns:
+        TeamID, Season, WinPct, AdjO, AdjD, AdjEM, AdjT,
+        AvgPoss, PointsPerPoss, PointsAllowedPerPoss
+    """
+    df = detailed_results[detailed_results["Season"] == season].copy()
+
+    if df.empty:
+        return pd.DataFrame()
+
+    # Calculate possessions for each game
+    df["WPoss"] = df.apply(lambda r: compute_possessions(r, "W"), axis=1)
+    df["LPoss"] = df.apply(lambda r: compute_possessions(r, "L"), axis=1)
+    df["AvgPoss"] = (df["WPoss"] + df["LPoss"]) / 2
+
+    # Build per-team stats
+    team_stats = {}
+
+    # Process winners
+    for _, row in df.iterrows():
+        wid, lid = row["WTeamID"], row["LTeamID"]
+        poss = row["AvgPoss"]
+
+        if poss == 0:
+            continue
+
+        for team_id, scored, allowed, won in [
+            (wid, row["WScore"], row["LScore"], True),
+            (lid, row["LScore"], row["WScore"], False),
+        ]:
+            if team_id not in team_stats:
+                team_stats[team_id] = {
+                    "games": 0,
+                    "wins": 0,
+                    "total_off_eff": 0,
+                    "total_def_eff": 0,
+                    "total_poss": 0,
+                    "opp_ids": [],
+                }
+            stats = team_stats[team_id]
+            stats["games"] += 1
+            stats["wins"] += int(won)
+            stats["total_off_eff"] += (scored / poss) * 100
+            stats["total_def_eff"] += (allowed / poss) * 100
+            stats["total_poss"] += poss
+            stats["opp_ids"].append(lid if team_id == wid else wid)
+
+    # Convert to DataFrame
+    rows = []
+    for team_id, stats in team_stats.items():
+        g = stats["games"]
+        if g == 0:
+            continue
+        rows.append(
+            {
+                "TeamID": team_id,
+                "Season": season,
+                "WinPct": stats["wins"] / g,
+                "RawOE": stats["total_off_eff"] / g,
+                "RawDE": stats["total_def_eff"] / g,
+                "AvgPoss": stats["total_poss"] / g,
+                "Games": g,
+            }
+        )
+
+    team_df = pd.DataFrame(rows)
+
+    if team_df.empty:
+        return team_df
+
+    # Iterative SOS adjustment (simplified KenPom-style)
+    # Start with raw efficiencies, adjust for opponent strength over 10 iterations
+    team_df = team_df.set_index("TeamID")
+    team_df["AdjO"] = team_df["RawOE"]
+    team_df["AdjD"] = team_df["RawDE"]
+
+    league_avg_oe = team_df["RawOE"].mean()
+    league_avg_de = team_df["RawDE"].mean()
+
+    for _ in range(10):
+        # For each team, compute average opponent AdjD and AdjO
+        new_adj_o = []
+        new_adj_d = []
+
+        for team_id in team_df.index:
+            opps = team_stats[team_id]["opp_ids"]
+            valid_opps = [o for o in opps if o in team_df.index]
+            if not valid_opps:
+                new_adj_o.append(team_df.loc[team_id, "RawOE"])
+                new_adj_d.append(team_df.loc[team_id, "RawDE"])
+                continue
+
+            # Adjust offense: raw_oe * (league_avg_de / avg_opp_adj_d)
+            avg_opp_adj_d = team_df.loc[valid_opps, "AdjD"].mean()
+            adj_o = team_df.loc[team_id, "RawOE"] * (league_avg_de / max(avg_opp_adj_d, 1))
+
+            # Adjust defense: raw_de * (league_avg_oe / avg_opp_adj_o)
+            avg_opp_adj_o = team_df.loc[valid_opps, "AdjO"].mean()
+            adj_d = team_df.loc[team_id, "RawDE"] * (league_avg_oe / max(avg_opp_adj_o, 1))
+
+            new_adj_o.append(adj_o)
+            new_adj_d.append(adj_d)
+
+        team_df["AdjO"] = new_adj_o
+        team_df["AdjD"] = new_adj_d
+
+    team_df["AdjEM"] = team_df["AdjO"] - team_df["AdjD"]
+    team_df["AdjT"] = team_df["AvgPoss"]
+
+    # Compute SOS as average opponent AdjEM
+    sos_values = []
+    for team_id in team_df.index:
+        opps = team_stats[team_id]["opp_ids"]
+        valid_opps = [o for o in opps if o in team_df.index]
+        if valid_opps:
+            sos_values.append(team_df.loc[valid_opps, "AdjEM"].mean())
+        else:
+            sos_values.append(0.0)
+    team_df["SOS"] = sos_values
+
+    return team_df.reset_index()[
+        ["TeamID", "Season", "WinPct", "AdjO", "AdjD", "AdjEM", "AdjT", "SOS", "Games"]
+    ]
+
+
+def compute_massey_composite(massey_df: pd.DataFrame, season: int, day_num: int = 133) -> pd.DataFrame:
+    """Compute composite Massey ordinal ranking (average across all systems).
+
+    day_num=133 is roughly Selection Sunday.
+    """
+    df = massey_df[(massey_df["Season"] == season) & (massey_df["RankingDayNum"] == day_num)]
+    if df.empty:
+        # Try the closest available day
+        avail = massey_df[massey_df["Season"] == season]["RankingDayNum"]
+        if avail.empty:
+            return pd.DataFrame(columns=["TeamID", "Season", "MasseyRank"])
+        closest_day = avail.iloc[(avail - day_num).abs().argsort().iloc[0]]
+        df = massey_df[
+            (massey_df["Season"] == season) & (massey_df["RankingDayNum"] == closest_day)
+        ]
+
+    composite = df.groupby("TeamID")["OrdinalRank"].mean().reset_index()
+    composite.columns = ["TeamID", "MasseyRank"]
+    composite["Season"] = season
+    return composite
+
+
+def compute_tourney_experience(seeds_df: pd.DataFrame, season: int, lookback: int = 5) -> pd.DataFrame:
+    """Count number of tournament appearances in the last N years for each team."""
+    past = seeds_df[
+        (seeds_df["Season"] >= season - lookback) & (seeds_df["Season"] < season)
+    ]
+    exp = past.groupby("TeamID").size().reset_index(name="TourneyExp")
+    exp["Season"] = season
+    return exp
+
+
+def build_matchup_features(
+    tourney_results: pd.DataFrame,
+    seeds_df: pd.DataFrame,
+    regular_detailed: pd.DataFrame,
+    massey_df: pd.DataFrame | None = None,
+    seasons: list[int] | None = None,
+) -> pd.DataFrame:
+    """Build feature matrix for all historical tournament matchups.
+
+    Each row represents a matchup (TeamA vs TeamB) with the label being
+    whether TeamA won. We create two rows per game (A vs B and B vs A)
+    for symmetry augmentation.
+
+    Returns DataFrame with feature columns and 'Result' (1 = TeamA won).
+    """
+    if seasons is None:
+        seasons = sorted(tourney_results["Season"].unique())
+
+    all_rows = []
+
+    for season in seasons:
+        # Compute team stats for this season
+        team_stats = compute_team_stats(regular_detailed, season)
+        if team_stats.empty:
+            continue
+
+        # Get Massey composite if available
+        massey = None
+        if massey_df is not None and not massey_df.empty:
+            massey = compute_massey_composite(massey_df, season)
+
+        # Tournament experience
+        tourney_exp = compute_tourney_experience(seeds_df, season)
+
+        # Get seed mapping for this season
+        season_seeds = seeds_df[seeds_df["Season"] == season].copy()
+        season_seeds["NumSeed"] = season_seeds["Seed"].apply(parse_seed)
+        seed_map = dict(zip(season_seeds["TeamID"], season_seeds["NumSeed"]))
+
+        # Build features for each tournament game
+        season_games = tourney_results[tourney_results["Season"] == season]
+
+        for _, game in season_games.iterrows():
+            winner_id = game["WTeamID"]
+            loser_id = game["LTeamID"]
+
+            for team_a, team_b, result in [
+                (winner_id, loser_id, 1),
+                (loser_id, winner_id, 0),
+            ]:
+                features = _compute_pair_features(
+                    team_a, team_b, season, seed_map, team_stats, massey, tourney_exp
+                )
+                if features is not None:
+                    features["Result"] = result
+                    features["Season"] = season
+                    all_rows.append(features)
+
+    return pd.DataFrame(all_rows)
+
+
+def _compute_pair_features(
+    team_a: int,
+    team_b: int,
+    season: int,
+    seed_map: dict[int, int],
+    team_stats: pd.DataFrame,
+    massey: pd.DataFrame | None,
+    tourney_exp: pd.DataFrame,
+) -> dict | None:
+    """Compute feature dict for a single A-vs-B matchup."""
+    seed_a = seed_map.get(team_a)
+    seed_b = seed_map.get(team_b)
+    if seed_a is None or seed_b is None:
+        return None
+
+    stats_a = team_stats[team_stats["TeamID"] == team_a]
+    stats_b = team_stats[team_stats["TeamID"] == team_b]
+    if stats_a.empty or stats_b.empty:
+        return None
+
+    sa = stats_a.iloc[0]
+    sb = stats_b.iloc[0]
+
+    features = {
+        "TeamA": team_a,
+        "TeamB": team_b,
+        "SeedA": seed_a,
+        "SeedB": seed_b,
+        "SeedDiff": seed_b - seed_a,  # positive = A is favored
+        "AdjODiff": sa["AdjO"] - sb["AdjO"],
+        "AdjDDiff": sa["AdjD"] - sb["AdjD"],  # lower is better for defense
+        "AdjEMDiff": sa["AdjEM"] - sb["AdjEM"],
+        "AdjTAvg": (sa["AdjT"] + sb["AdjT"]) / 2,
+        "SOSDiff": sa["SOS"] - sb["SOS"],
+        "WinPctDiff": sa["WinPct"] - sb["WinPct"],
+    }
+
+    # Massey rank
+    if massey is not None and not massey.empty:
+        rank_a = massey[massey["TeamID"] == team_a]
+        rank_b = massey[massey["TeamID"] == team_b]
+        if not rank_a.empty and not rank_b.empty:
+            features["MasseyRankDiff"] = rank_b.iloc[0]["MasseyRank"] - rank_a.iloc[0]["MasseyRank"]
+        else:
+            features["MasseyRankDiff"] = 0.0
+    else:
+        features["MasseyRankDiff"] = 0.0
+
+    # Tournament experience
+    exp_a = tourney_exp[tourney_exp["TeamID"] == team_a]
+    exp_b = tourney_exp[tourney_exp["TeamID"] == team_b]
+    features["TourneyExpDiff"] = (
+        (exp_a.iloc[0]["TourneyExp"] if not exp_a.empty else 0)
+        - (exp_b.iloc[0]["TourneyExp"] if not exp_b.empty else 0)
+    )
+
+    return features
+
+
+FEATURE_COLUMNS = [
+    "SeedDiff",
+    "AdjODiff",
+    "AdjDDiff",
+    "AdjEMDiff",
+    "AdjTAvg",
+    "SOSDiff",
+    "WinPctDiff",
+    "MasseyRankDiff",
+    "TourneyExpDiff",
+]
+
+
+def save_features(df: pd.DataFrame, output_dir: str | Path = "data/processed") -> Path:
+    """Save feature matrix to parquet."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / "matchup_features.parquet"
+    df.to_parquet(path, index=False)
+    return path
+
+
+def load_features(data_dir: str | Path = "data/processed") -> pd.DataFrame:
+    """Load saved feature matrix."""
+    path = Path(data_dir) / "matchup_features.parquet"
+    return pd.read_parquet(path)
