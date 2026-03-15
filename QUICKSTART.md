@@ -292,6 +292,63 @@ teams you've already used and entries that were eliminated.
 
 **Repeat this cycle for all 9 game days.**
 
+### Get mid-tournament advice (live bracket)
+
+Once the tournament is underway, `advise` pulls live results from ESPN,
+shows which teams are still available for each entry, and guarantees you
+won't run out of picks in future rounds:
+
+```bash
+docker run --rm \
+  -v ./data:/app/data \
+  -v ./models:/app/models \
+  -v ./entries:/app/entries \
+  -v ./config.yaml:/app/config.yaml \
+  marchmadness advise
+```
+
+It auto-detects the current day and round. You can also specify used teams
+manually:
+
+```bash
+docker run --rm \
+  -v ./data:/app/data \
+  -v ./models:/app/models \
+  -v ./config.yaml:/app/config.yaml \
+  marchmadness advise --used "0:Duke,Florida;1:Duke,UConn"
+```
+
+The format is `entry:team1,team2;entry:team1,team2`. The tool will:
+- Show available (alive + unused) teams for each entry
+- Flag entries that are **at risk** or **critical** (running low on options)
+- Recommend a pick that maximizes EV while keeping future coverage safe
+
+If ESPN is unavailable, add `--no-live` to skip the live fetch and use
+your local bracket file instead.
+
+### Analyze your portfolio (large entry pools)
+
+If you have many entries, `analyze` runs a full distribution analysis to
+show how diversified your portfolio is:
+
+```bash
+docker run --rm \
+  -v ./data:/app/data \
+  -v ./models:/app/models \
+  -v ./entries:/app/entries \
+  -v ./output:/app/output \
+  -v ./config.yaml:/app/config.yaml \
+  marchmadness analyze --sims 10000
+```
+
+This generates:
+- **Team concentration** — are too many entries on the same team? (HHI index)
+- **Survival distribution** — how many entries survive each round on average?
+- **Entry correlation** — if one team loses, how many entries die together?
+- **Charts** saved to `output/` (heatmap, histogram, funnel, correlation matrix, exposure bar)
+
+See `samples/analyze_output.txt` for example output.
+
 ---
 
 ## Troubleshooting
@@ -328,6 +385,8 @@ template in `data/bracket.json`.
 | Download data | `docker run --rm -v ~/.kaggle:/root/.kaggle -v ./data:/app/data marchmadness download` |
 | Train model | `docker run --rm -v ./data:/app/data -v ./models:/app/models marchmadness train` |
 | Get picks | `docker run --rm -v ./data:/app/data -v ./models:/app/models -v ./entries:/app/entries -v ./config.yaml:/app/config.yaml marchmadness optimize --day 1` |
+| Mid-tournament advice | `docker run --rm -v ./data:/app/data -v ./models:/app/models -v ./entries:/app/entries -v ./config.yaml:/app/config.yaml marchmadness advise` |
+| Analyze portfolio | `docker run --rm -v ./data:/app/data -v ./models:/app/models -v ./entries:/app/entries -v ./output:/app/output -v ./config.yaml:/app/config.yaml marchmadness analyze` |
 | Record results | `docker run --rm -v ./entries:/app/entries -v ./config.yaml:/app/config.yaml marchmadness results --day 1 <team_ids>` |
 | Check status | `docker run --rm -v ./entries:/app/entries -v ./config.yaml:/app/config.yaml marchmadness status` |
 
