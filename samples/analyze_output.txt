@@ -1,0 +1,52 @@
+$ marchmadness analyze --sims 10000
+
+Analyzing 25 alive entries (10,000 simulations)...
+
+======================================================================
+TEAM CONCENTRATION
+======================================================================
+  Day 1 (R64 Thursday): 12 unique teams | HHI=0.142 | Max: 32% on (1) Duke
+  Day 2 (R64 Friday): 11 unique teams | HHI=0.155 | Max: 28% on (1) Arizona
+  Day 3 (R32 Saturday): 8 unique teams | HHI=0.198 | Max: 36% on (2) Illinois
+  Day 4 (R32 Sunday): 7 unique teams | HHI=0.224 | Max: 40% on (1) Michigan
+
+======================================================================
+SURVIVAL DISTRIBUTION (Monte Carlo)
+======================================================================
+  Day                        Mean   Med   Std  Min  Max   P(0)  P(1+)
+  ----------------------------------------------------------------
+  R64 Thursday                22.3    23   2.1   14   25   0.0% 100.0%
+  R64 Friday                  19.8    20   2.8   10   25   0.0% 100.0%
+  R32 Saturday                16.4    17   3.2    6   23   0.0% 100.0%
+  R32 Sunday                  13.1    13   3.5    3   21   0.0% 100.0%
+  S16 Thursday                 9.2     9   3.1    1   18   0.2%  99.8%
+  S16 Friday                   6.8     7   2.8    0   15   1.4%  98.6%
+  Elite 8                      3.4     3   2.1    0   10   5.8%  94.2%
+  Final Four                   1.8     2   1.4    0    7  14.2%  85.8%
+  Championship                 0.9     1   0.9    0    4  36.1%  63.9%
+
+======================================================================
+ENTRY CORRELATION
+======================================================================
+  Mean pairwise elimination correlation: 0.127
+
+  Top team exposure (entries eliminated if team loses):
+    (1) Duke                : 8 entries (32%)
+    (1) Arizona             : 7 entries (28%)
+    (2) Illinois            : 6 entries (24%)
+    (1) Michigan            : 5 entries (20%)
+    (1) Florida             : 5 entries (20%)
+    (2) Connecticut         : 4 entries (16%)
+    (3) Purdue              : 4 entries (16%)
+    (3) Iowa St.            : 3 entries (12%)
+    (4) Alabama             : 3 entries (12%)
+    (2) Houston             : 3 entries (12%)
+
+Generating charts to output/...
+  Saved: output/concentration_heatmap.png
+  Saved: output/survival_distribution.png
+  Saved: output/survival_funnel.png
+  Saved: output/correlation_matrix.png
+  Saved: output/team_exposure.png
+
+======================================================================

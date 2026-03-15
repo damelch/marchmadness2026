@@ -354,6 +354,252 @@ def optimize(ctx, day_num, method, pool_size, num_entries, max_entries):
             click.echo(f"  Joint survival: {ev['joint_survival']:.1%}")
 
 
+@main.command()
+@click.option("--day", "day_num", type=int, default=None,
+              help="Contest day number (auto-detected if omitted)")
+@click.option("--used", "used_teams_str", type=str, default=None,
+              help='Used teams per entry: "0:Duke,Florida;1:Duke,UConn"')
+@click.option("--entries-alive", type=int, default=None,
+              help="Number of alive entries (default: from state or config)")
+@click.option("--no-live", is_flag=True, default=False,
+              help="Skip ESPN live fetch; use bracket.json as-is (all teams alive)")
+@click.option("--method", default="analytical",
+              type=click.Choice(["analytical", "hybrid"]))
+@click.pass_context
+def advise(ctx, day_num, used_teams_str, entries_alive, no_live, method):
+    """Get mid-tournament pick advice with coverage guarantees."""
+    import json as _json
+
+    from data.live_bracket import fetch_live_state
+    from entries.manager import EntryManager
+    from models.predict import Predictor
+    from optimizer.coverage import compute_coverage
+
+    config = ctx.obj["config"]
+    sched = ctx.obj["schedule"]
+
+    # --- Load bracket ---
+    bracket_path = Path("data/bracket.json")
+    if not bracket_path.exists():
+        click.echo("Error: data/bracket.json not found.")
+        return
+    with open(bracket_path) as f:
+        bracket = _load_bracket(_json.load(f))
+
+    # --- Build predictor ---
+    seed_map = {t: info["seed"] for t, info in bracket.teams.items()}
+    model_path = Path("models/saved/model.pkl")
+    if model_path.exists():
+        from models.train import load_model
+        model = load_model()
+        predictor = Predictor(model=model, seed_map=seed_map)
+    else:
+        predictor = Predictor(seed_map=seed_map)
+
+    # --- Fetch live bracket state ---
+    all_team_ids = set(bracket.teams.keys())
+    live_state = None
+
+    if not no_live:
+        click.echo("Fetching live bracket from ESPN...")
+        live_state = fetch_live_state(bracket, sched)
+        if live_state is None:
+            click.echo("  Warning: ESPN API unavailable. Using all teams as alive.")
+
+    if live_state is not None:
+        alive_teams = live_state.alive_team_ids
+        detected_day = live_state.current_day
+        games_completed = live_state.games_completed
+        if live_state.unmatched_teams:
+            click.echo(f"  Warning: Could not match ESPN names: {live_state.unmatched_teams}")
+    else:
+        alive_teams = all_team_ids
+        detected_day = 1
+        games_completed = 0
+
+    if day_num is None:
+        day_num = detected_day
+        click.echo(f"  Auto-detected contest day: {day_num}")
+
+    day = sched.get_day(day_num)
+
+    # --- Parse used teams ---
+    entries_data: dict[int, set[int]] = {}
+
+    # First try loading from state.json
+    entry_path = Path("entries/state.json")
+    if entry_path.exists():
+        mgr = EntryManager.load(entry_path)
+        for entry in mgr.get_alive_entries():
+            entries_data[entry.entry_id] = set(entry.used_teams)
+
+    # Override/supplement with --used flag
+    if used_teams_str:
+        entries_data = _parse_used_teams(used_teams_str, bracket)
+
+    # If no entries at all, create default entries
+    if not entries_data:
+        n = entries_alive or config["pool"].get("num_entries", 1)
+        for i in range(n):
+            entries_data[i] = set()
+
+    # If --entries-alive limits the count
+    if entries_alive is not None and entries_alive < len(entries_data):
+        entries_data = dict(list(entries_data.items())[:entries_alive])
+
+    # --- Compute win probabilities for today's matchups ---
+    matchups = bracket.get_day_matchups(day.round_num, day.regions)
+    teams_playing = set()
+    win_probs: dict[int, float] = {}
+    for team_a, team_b, _slot in matchups:
+        if team_a is not None and team_b is not None:
+            teams_playing.add(team_a)
+            teams_playing.add(team_b)
+            try:
+                p = predictor.predict_matchup(team_a, team_b)
+                win_probs[team_a] = p
+                win_probs[team_b] = 1.0 - p
+            except Exception:
+                # Seed-based fallback
+                sa = bracket.teams.get(team_a, {}).get("seed", 8)
+                sb = bracket.teams.get(team_b, {}).get("seed", 8)
+                pa = 0.5 + 0.03 * (sb - sa)
+                pa = max(0.05, min(0.95, pa))
+                win_probs[team_a] = pa
+                win_probs[team_b] = 1.0 - pa
+
+    # --- Header ---
+    source = "ESPN Live API" if live_state else "bracket.json (offline)"
+    n_alive = len(alive_teams)
+    n_total = len(all_team_ids)
+    click.echo(f"\n{'='*70}")
+    click.echo(f"LIVE BRACKET ADVISORY — Day {day_num} ({day.label})")
+    click.echo(f"  Source: {source} | Round: {day.round_num} | Regions: {', '.join(day.regions)}")
+    click.echo(f"  Alive: {n_alive}/{n_total} teams | Games completed: {games_completed}/63")
+    click.echo(f"{'='*70}")
+
+    # --- Per-entry analysis ---
+    for entry_id, used_teams in sorted(entries_data.items()):
+        coverage = compute_coverage(
+            bracket, alive_teams, used_teams,
+            day_num, sched, win_probs,
+        )
+        coverage.entry_id = entry_id
+
+        # Used teams display
+        used_names = []
+        for t in sorted(used_teams):
+            info = bracket.teams.get(t, {})
+            used_names.append(f"({info.get('seed', '?')}) {info.get('name', t)}")
+        used_str = ", ".join(used_names) if used_names else "(none)"
+
+        click.echo(f"\nENTRY {entry_id}:")
+        click.echo(f"  Used teams: {used_str}")
+        click.echo(f"  Available (alive & unused): {len(coverage.available_teams)} teams")
+
+        # Show available teams
+        for t in coverage.available_teams[:12]:
+            marker = "*" if t["id"] in coverage.safety_set else " "
+            click.echo(
+                f"   {marker}({t['seed']}) {t['name']:20s} [{t['region']}]  "
+                f"Win={t['win_prob']:.1%}"
+            )
+        if len(coverage.available_teams) > 12:
+            click.echo(f"    ... and {len(coverage.available_teams) - 12} more")
+
+        # Coverage assessment
+        risk_icon = {"safe": "SAFE", "at_risk": "AT RISK", "critical": "CRITICAL"}
+        click.echo(
+            f"  Coverage: {risk_icon[coverage.risk_level]} — {coverage.risk_reason}"
+        )
+
+        # Safety set
+        if coverage.safety_set and coverage.risk_level != "safe":
+            safety_names = []
+            for t_id in coverage.safety_set:
+                info = bracket.teams.get(t_id, {})
+                safety_names.append(info.get("name", str(t_id)))
+            click.echo(f"  Safety set: {{{', '.join(safety_names)}}}")
+
+        # Uncovered matchups warning
+        if coverage.uncovered_matchups:
+            click.echo("  WARNING: Uncovered matchups (both sides already used):")
+            for a, b in coverage.uncovered_matchups:
+                na = bracket.teams.get(a, {}).get("name", str(a))
+                nb = bracket.teams.get(b, {}).get("name", str(b))
+                click.echo(f"    {na} vs {nb}")
+
+        # Future day risks
+        if coverage.future_risks:
+            risky_days = [
+                r for r in coverage.future_risks
+                if r.worst_case_available < 2 * r.picks_needed
+            ]
+            if risky_days:
+                click.echo("  Future day outlook:")
+                for r in risky_days:
+                    status = "OK"
+                    if r.worst_case_available < r.picks_needed:
+                        status = "BLOCKED"
+                    elif r.worst_case_available < 2 * r.picks_needed:
+                        status = "TIGHT"
+                    scenarios = ""
+                    if r.blocked_scenarios > 0:
+                        scenarios = (
+                            f" ({r.blocked_scenarios}/{r.total_scenarios} "
+                            f"scenarios blocked)"
+                        )
+                    click.echo(
+                        f"    Day {r.day_num} ({r.label}): {status} — "
+                        f"worst case {r.worst_case_available} avail, "
+                        f"need {r.picks_needed}{scenarios}"
+                    )
+
+        # Recommendation: best available by EV
+        if coverage.available_teams:
+            best = coverage.available_teams[0]
+            click.echo(
+                f"  > Recommended: ({best['seed']}) {best['name']} — "
+                f"Win={best['win_prob']:.1%}"
+            )
+
+    click.echo(f"\n{'='*70}")
+
+
+def _parse_used_teams(
+    used_str: str, bracket,
+) -> dict[int, set[int]]:
+    """Parse --used flag: '0:Duke,Florida;1:Duke,UConn' -> {0: {id, id}, ...}."""
+    from data.live_bracket import resolve_team_name
+
+    result: dict[int, set[int]] = {}
+    for entry_part in used_str.split(";"):
+        entry_part = entry_part.strip()
+        if not entry_part:
+            continue
+        if ":" in entry_part:
+            eid_str, teams_str = entry_part.split(":", 1)
+            eid = int(eid_str.strip())
+        else:
+            # Single entry mode — entry 0
+            eid = 0
+            teams_str = entry_part
+
+        team_ids: set[int] = set()
+        for name in teams_str.split(","):
+            name = name.strip()
+            if not name:
+                continue
+            tid = resolve_team_name(name, bracket)
+            if tid is not None:
+                team_ids.add(tid)
+            else:
+                click.echo(f"  Warning: Could not resolve team name '{name}'")
+        result[eid] = team_ids
+
+    return result
+
+
 @main.command("results")
 @click.option("--day", "day_num", type=int, required=True)
 @click.argument("winners", nargs=-1, type=int)
@@ -397,6 +643,113 @@ def status(ctx):
 
     df = pd.DataFrame(sheets)
     click.echo(df.to_string(index=False))
+
+
+@main.command()
+@click.option("--output", "output_dir", default="output",
+              help="Directory for chart PNGs (default: output/)")
+@click.option("--sims", "n_sims", type=int, default=10000,
+              help="Monte Carlo simulations (default: 10000)")
+@click.pass_context
+def analyze(ctx, output_dir, n_sims):
+    """Distribution analysis: concentration, survival, and correlation across entries."""
+    import json as _json
+
+    from entries.manager import EntryManager
+    from models.predict import Predictor
+    from optimizer.distribution import analyze_distribution
+    from visualization.charts import generate_all_charts
+
+    sched = ctx.obj["schedule"]
+
+    # Load bracket
+    bracket_path = Path("data/bracket.json")
+    if not bracket_path.exists():
+        click.echo("Error: data/bracket.json not found.")
+        return
+    with open(bracket_path) as f:
+        bracket = _load_bracket(_json.load(f))
+
+    # Load entries
+    entry_path = Path("entries/state.json")
+    if not entry_path.exists():
+        click.echo("No entries found. Run `marchmadness optimize` first.")
+        return
+    mgr = EntryManager.load(entry_path)
+    alive = mgr.get_alive_entries()
+    if not alive:
+        click.echo("All entries eliminated. Nothing to analyze.")
+        return
+
+    # Build predictor
+    seed_map = {t: info["seed"] for t, info in bracket.teams.items()}
+    model_path = Path("models/saved/model.pkl")
+    if model_path.exists():
+        from models.train import load_model
+        model = load_model()
+        predictor = Predictor(model=model, seed_map=seed_map)
+    else:
+        predictor = Predictor(seed_map=seed_map)
+
+    click.echo(f"Analyzing {len(alive)} alive entries ({n_sims:,} simulations)...")
+    report = analyze_distribution(
+        bracket, mgr, sched, predictor.predict_matchup, n_sims=n_sims,
+    )
+
+    # --- Team Concentration ---
+    click.echo(f"\n{'='*70}")
+    click.echo("TEAM CONCENTRATION")
+    click.echo(f"{'='*70}")
+    for conc in report.concentration_by_day:
+        max_info = bracket.teams.get(conc.max_concentration_team, {})
+        max_name = max_info.get("name", "?")
+        click.echo(
+            f"  Day {conc.day_num} ({conc.label}): "
+            f"{conc.n_unique_teams} unique teams | "
+            f"HHI={conc.hhi:.3f} | "
+            f"Max: {conc.max_concentration:.0%} on ({max_info.get('seed', '?')}) {max_name}"
+        )
+
+    # --- Survival Distribution ---
+    click.echo(f"\n{'='*70}")
+    click.echo("SURVIVAL DISTRIBUTION (Monte Carlo)")
+    click.echo(f"{'='*70}")
+    click.echo(f"  {'Day':<25s} {'Mean':>6s} {'Med':>5s} {'Std':>5s} "
+               f"{'Min':>4s} {'Max':>4s} {'P(0)':>6s} {'P(1+)':>6s}")
+    click.echo(f"  {'-'*62}")
+    for surv in report.survival:
+        click.echo(
+            f"  {surv.label:<25s} {surv.mean_alive:>6.1f} {surv.median_alive:>5.0f} "
+            f"{surv.std_alive:>5.1f} {surv.min_alive:>4d} {surv.max_alive:>4d} "
+            f"{surv.p_zero:>6.1%} {surv.p_at_least_one:>6.1%}"
+        )
+
+    # --- Correlation ---
+    click.echo(f"\n{'='*70}")
+    click.echo("ENTRY CORRELATION")
+    click.echo(f"{'='*70}")
+    click.echo(f"  Mean pairwise elimination correlation: {report.correlation.mean_pairwise:.3f}")
+
+    # Top exposure
+    sorted_exp = sorted(
+        report.correlation.team_exposure.items(), key=lambda x: x[1], reverse=True,
+    )[:10]
+    click.echo("\n  Top team exposure (entries eliminated if team loses):")
+    for team_id, count in sorted_exp:
+        info = bracket.teams.get(team_id, {})
+        frac = count / report.n_alive if report.n_alive else 0
+        click.echo(
+            f"    ({info.get('seed', '?')}) {info.get('name', team_id):20s}: "
+            f"{count} entries ({frac:.0%})"
+        )
+
+    # --- Generate charts ---
+    click.echo(f"\nGenerating charts to {output_dir}/...")
+    saved = generate_all_charts(report, output_dir)
+    for p in saved:
+        click.echo(f"  Saved: {p}")
+
+    click.echo(f"\n{'='*70}")
 
 
 def _create_demo_bracket():

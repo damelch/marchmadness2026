@@ -1,0 +1,41 @@
+$ marchmadness advise --day 5 --used "0:Duke,Florida,Iowa,Kansas;1:Duke,UConn,Arkansas,Purdue"
+
+Fetching live bracket from ESPN...
+  Auto-detected contest day: 5
+
+======================================================================
+LIVE BRACKET ADVISORY — Day 5 (S16 Thursday)
+  Source: ESPN Live API | Round: 3 | Regions: W, X
+  Alive: 16/64 teams | Games completed: 48/63
+======================================================================
+
+ENTRY 0:
+  Used teams: (1) Duke, (1) Florida, (8) Iowa, (4) Kansas
+  Available (alive & unused): 8 teams
+   *(2) Illinois              [W]  Win=72.3%
+    (3) Iowa St.              [W]  Win=68.1%
+   *(2) Connecticut           [X]  Win=65.4%
+    (3) Purdue                [X]  Win=63.2%
+    (5) Arkansas              [W]  Win=58.0%
+    (6) Louisville            [X]  Win=55.1%
+    (7) Saint Mary's          [W]  Win=52.3%
+    (7) Georgia               [X]  Win=50.8%
+  Coverage: SAFE — 8 available, 5 picks remaining
+  > Recommended: (2) Illinois — Win=72.3%
+
+ENTRY 1:
+  Used teams: (1) Duke, (2) Connecticut, (5) Arkansas, (3) Purdue
+  Available (alive & unused): 6 teams
+   *(2) Illinois              [W]  Win=72.3%
+    (3) Iowa St.              [W]  Win=68.1%
+   *(6) Louisville            [X]  Win=55.1%
+    (7) Saint Mary's          [W]  Win=52.3%
+    (7) Georgia               [X]  Win=50.8%
+    (8) Iowa                  [W]  Win=48.2%
+  Coverage: AT RISK — Day 7 (Elite 8): worst case 1 available for 2 picks
+  Future day outlook:
+    Day 7 (Elite 8): TIGHT — worst case 1 avail, need 2 (48/256 scenarios blocked)
+  Safety set: {Illinois, Louisville}
+  > Recommended: (2) Illinois — Win=72.3%
+
+======================================================================
