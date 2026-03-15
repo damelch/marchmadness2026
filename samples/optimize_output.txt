@@ -8,15 +8,15 @@ PICK RECOMMENDATIONS - Day 1 (R64 Thursday)
   ** Double-pick day: both picks must win to survive **
 ======================================================================
   Entry 0: (1) Duke Win=95.2% Own=18.4% + (3) Iowa St. Win=83.1% Own=8.2%    EV=$18.42
-  Entry 2: (1) Florida Win=94.8% Own=17.2% + (3) Purdue Win=82.5% Own=9.3%   EV=$17.15
-  Entry 6: (1) Duke Win=95.2% Own=18.4% + (2) Connecticut Win=87.9% Own=11.8% EV=$16.24
-  Entry 5: (2) Illinois Win=88.3% Own=12.1% + (2) Connecticut Win=87.9% Own=11.8% EV=$15.83
-  Entry 4: (2) Illinois Win=88.3% Own=12.1% + (3) Iowa St. Win=83.1% Own=8.2% EV=$15.30
   Entry 1: (1) Duke Win=95.2% Own=18.4% + (4) Texas Tech Win=78.0% Own=6.1%  EV=$14.89
-  Entry 3: (1) Florida Win=94.8% Own=17.2% + (4) Kansas Win=77.4% Own=7.0%   EV=$14.21
-  Entry 8: (2) Illinois Win=88.3% Own=12.1% + (4) Kansas Win=77.4% Own=7.0%  EV=$13.04
+  Entry 6: (1) Duke Win=95.2% Own=18.4% + (2) Connecticut Win=87.9% Own=11.8% EV=$16.24
   Entry 9: (1) Duke Win=95.2% Own=18.4% + (5) North Carolina Win=65.0% Own=4.8% EV=$10.27
+  Entry 2: (1) Florida Win=94.8% Own=17.2% + (3) Purdue Win=82.5% Own=9.3%   EV=$17.15
+  Entry 3: (1) Florida Win=94.8% Own=17.2% + (4) Kansas Win=77.4% Own=7.0%   EV=$14.21
   Entry 7: (1) Florida Win=94.8% Own=17.2% + (6) Louisville Win=63.2% Own=3.4% EV=$7.52
+  Entry 4: (2) Illinois Win=88.3% Own=12.1% + (3) Iowa St. Win=83.1% Own=8.2% EV=$15.30
+  Entry 5: (2) Illinois Win=88.3% Own=12.1% + (2) Connecticut Win=87.9% Own=11.8% EV=$15.83
+  Entry 8: (2) Illinois Win=88.3% Own=12.1% + (4) Kansas Win=77.4% Own=7.0%  EV=$13.04
   DP: Saving (1) Arizona, (1) Michigan for later rounds (high future value)
   DP: Day 1 has 32 games — many options, diversify across entries
 
