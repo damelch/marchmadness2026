@@ -15,6 +15,7 @@ import yaml
 from contest.schedule import ContestSchedule
 from entries.manager import EntryManager
 from models.predict import Predictor
+from optimizer.aco import aco_optimize
 from optimizer.analytical import exact_day_ev, exact_round_ev, optimal_day_picks
 from optimizer.differentiation import generate_differentiation_report, optimize_multi_entry
 from optimizer.dp import compute_advancement_probs, compute_round_win_probs, dp_optimal_picks
@@ -42,6 +43,7 @@ def generate_picks(
 
     Methods:
         "hybrid": Full pipeline — Nash ownership + DP future values + analytical EV (recommended)
+        "aco": Ant Colony Optimization — MC sim + DP future values + ACO search (best for large portfolios)
         "analytical": Analytical EV with heuristic ownership (fast, no simulation needed)
         "differentiation": Legacy greedy leverage-based picks (fastest, single-pick only)
 
@@ -52,7 +54,7 @@ def generate_picks(
         day_num: Contest day number (1-9)
         schedule: Contest schedule mapping days to games
         config: Configuration dict (loaded from config.yaml)
-        method: "hybrid", "analytical", or "differentiation"
+        method: "hybrid", "aco", "analytical", or "differentiation"
     """
     if config is None:
         config = load_config()
@@ -189,6 +191,85 @@ def generate_picks(
             "future_values": dp_result["future_values"],
             "picks_without_fv": dp_result["picks_without_fv"],
             "reasoning": dp_result["reasoning"],
+        }
+
+        # Best response against estimated field
+        br = best_response(win_probs, ownership, pool_size, prize_pool, len(alive_entries))
+        results["best_response"] = br[:10]
+
+        # Evaluate the picks
+        if num_picks == 1:
+            flat_picks = [ps[0] for ps in picks]
+            ev_result = exact_round_ev(
+                flat_picks, win_probs, ownership, pool_size, prize_pool, matchup_pairs,
+            )
+        else:
+            ev_per = []
+            for ps in picks:
+                ev = exact_day_ev(
+                    ps, win_probs, ownership, pool_size, prize_pool,
+                    num_picks_per_opponent=num_picks, n_our_entries=len(alive_entries),
+                    matchup_pairs=matchup_pairs,
+                )
+                ev_per.append(ev)
+            joint_surv = 1.0
+            for ps in picks:
+                p = 1.0
+                for t in ps:
+                    p *= win_probs.get(t, 0.5)
+                joint_surv *= (1.0 - p)
+            ev_result = {
+                "ev_per_entry": ev_per,
+                "total_ev": sum(ev_per),
+                "joint_survival": 1.0 - joint_surv,
+                "per_entry_survival": [
+                    math.prod(win_probs.get(t, 0.5) for t in ps) for ps in picks
+                ],
+            }
+        results["evaluation"] = ev_result
+
+    elif method == "aco":
+        # ACO uses same pipeline as hybrid: MC sim + DP future values + ACO search
+        sim_results = simulate_tournament(
+            bracket, predictor.predict_matchup,
+            n_sims=sim_cfg.get("num_sims", 50000),
+            rng_seed=sim_cfg.get("seed", 42),
+        )
+
+        round_win_probs = compute_round_win_probs(bracket, predictor.predict_matchup, sim_results)
+        adv_probs = compute_advancement_probs(sim_results, bracket)
+
+        # Compute future values for team preservation
+        from optimizer.dp import compute_future_values
+        future_vals = compute_future_values(
+            bracket, round_win_probs, adv_probs, day_num,
+            schedule=schedule, pool_size=pool_size, prize_pool=prize_pool,
+        )
+
+        # Get available teams
+        current_win_probs = round_win_probs.get(round_num, win_probs)
+        all_available = {}
+        for d in available_per_entry_dicts:
+            all_available.update(d)
+
+        # Run ACO optimization
+        picks = aco_optimize(
+            n_entries=len(alive_entries),
+            available_teams=all_available,
+            win_probs=current_win_probs,
+            ownership=ownership,
+            pool_size=pool_size,
+            prize_pool=prize_pool,
+            num_picks=num_picks,
+            used_teams_per_entry=[e.used_teams for e in alive_entries],
+            future_values=future_vals,
+            matchup_pairs=matchup_pairs,
+        )
+
+        results["dp_analysis"] = {
+            "future_values": {t: round(v, 4) for t, v in future_vals.items() if v > 0.01},
+            "picks_without_fv": None,
+            "reasoning": [f"Entry {i+1}: ACO-optimized" for i in range(len(alive_entries))],
         }
 
         # Best response against estimated field

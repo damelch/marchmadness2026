@@ -58,7 +58,7 @@ Or use the Makefile:
 
 ```bash
 make build                  # Build Docker image
-make test                   # Run 130 tests
+make test                   # Run 141 tests
 make lint                   # Ruff lint check (zero violations)
 make format                 # Ruff format check
 make simulate               # 50k Monte Carlo sims
@@ -74,15 +74,54 @@ The Docker image uses Python 3.12 and includes all dependencies. Mount your `dat
 
 ## How It Works
 
-### Win Probability Model
+The system has two phases: **build** (train the model before the bracket is announced) and **optimize** (generate picks once you have the bracket). Each phase can run independently — you can skip training entirely and use just KenPom ratings.
 
-Three-tier prediction with automatic fallback:
+### End-to-End Pipeline
 
-**1. Stacked ensemble with 6 base models** (primary)
+![Pipeline Diagram](docs/pipeline.png)
 
-A meta-learner (logistic regression) trained on out-of-fold predictions from 6 base models: Logistic Regression, XGBoost, LightGBM, CatBoost, Random Forest, and Gaussian Naive Bayes. The meta-learner uses leave-one-season-out cross-validation to learn optimal model weights without overfitting. Individual models are also available (`xgboost`, `lightgbm`, `catboost`, `randomforest`, `naivebayes`, `logistic`).
+```
+PHASE 1: BUILD (before Selection Sunday)
 
-Trained on 12 seasons of NCAA tournament results (2013-2025, excluding 2020). Features are differences between teams:
+  Kaggle CSVs ──→ Feature Engineering ──→ Training ──→ Evaluation
+  (12 seasons)    (18 matchup features)   (6 models)   (LOSO CV)
+                                              │
+                                              ▼
+                                        models/saved/model.pkl
+
+PHASE 2: OPTIMIZE (after Selection Sunday)
+
+  bracket.json ──→ Predictor ──→ MC Simulation ──→ Optimizer ──→ Picks
+  (64 teams)       (3-tier      (50k tournament   (EV + Nash +
+                    fallback)    simulations)       DP + ACO)
+```
+
+### Phase 1: Building the Model
+
+#### Step 1 — Download historical data (`marchmadness download`)
+
+Downloads 12 seasons of NCAA tournament data from Kaggle (2013-2025, excluding 2020). Five CSV files land in `data/raw/`:
+
+- **MRegularSeasonDetailedResults.csv** — every regular season game with box score stats (FGA, FTA, rebounds, turnovers, etc.)
+- **MNCAATourneyCompactResults.csv** — tournament game outcomes (who won, scores)
+- **MNCAATourneySeeds.csv** — tournament seeding (which teams got which seeds)
+- **MMasseyOrdinals.csv** — composite rankings from 100+ ranking systems at Selection Sunday
+- **MTeams.csv** — team ID ↔ name mapping
+
+#### Step 2 — Engineer features (`marchmadness features`)
+
+Transforms raw box scores into 18 matchup features. Each feature is a **difference** between the two teams (TeamA minus TeamB), so the model learns which gaps matter most.
+
+**From box scores** → the feature pipeline computes KenPom-style efficiency stats for every team in every season:
+- Offensive/defensive efficiency (points per 100 possessions, adjusted for opponent strength)
+- Iterative SOS adjustment (10 rounds of opponent-strength normalization)
+- Scoring margin consistency (std dev of per-game efficiency margins)
+
+**From tournament seeds** → seed difference, tournament experience (appearances in prior 5 years)
+
+**From Massey Ordinals** → composite ranking averaged across all ranking systems at Selection Sunday
+
+**From external sources** (optional) → Barttorvik T-Rank (Barthag, WAB) and ESPN BPI ratings. These are fetched separately and merged if available — the model defaults missing values to 0.
 
 | Feature | Source | What it captures |
 |---------|--------|-----------------|
@@ -105,78 +144,120 @@ Trained on 12 seasons of NCAA tournament results (2013-2025, excluding 2020). Fe
 | BPIOffDiff | ESPN BPI | Offensive strength per 70 possessions |
 | BPIDefDiff | ESPN BPI | Defensive strength per 70 possessions |
 
-Barttorvik and ESPN BPI features are optional — the model gracefully defaults to 0 if the data isn't available. Fetch them with:
+Each tournament game produces two training rows (A-vs-B and B-vs-A for symmetry), giving ~6,000-7,000 rows across 12 seasons. Output: `data/processed/matchup_features.parquet`.
+
+Barttorvik and ESPN BPI features are optional — fetch them with:
 ```bash
 marchmadness fetch-bpi          # ESPN BPI (free, no auth)
 marchmadness fetch-barttorvik   # Barttorvik T-Rank (free, may need manual CSV)
 ```
 
-Multiple calibration methods ensure a predicted 70% probability actually wins ~70% of the time:
+#### Step 3 — Train the model (`marchmadness train`)
+
+Eight model types are available, configured via `model.type` in `config.yaml`:
+
+| Model | Type | Notes |
+|-------|------|-------|
+| `stacked` | Stacked ensemble | **Default.** 6 base models + logistic meta-learner |
+| `xgboost` | Gradient boosting | Good standalone performance |
+| `lightgbm` | Gradient boosting | Fast training, handles categorical features |
+| `catboost` | Gradient boosting | Built-in categorical support |
+| `randomforest` | Bagging | Robust, less prone to overfitting |
+| `logistic` | Linear | Baseline, uses StandardScaler |
+| `naivebayes` | Probabilistic | Fast, uses StandardScaler |
+| `ensemble` | Simple average | Average of logistic + XGBoost |
+
+**How the stacked ensemble trains:**
+
+1. **Leave-One-Season-Out (LOSO)**: For each of the 12 holdout seasons, train all 6 base models on the other 11 seasons. Generate out-of-fold predictions — a 6-column matrix where each column is one model's predicted win probability.
+2. **Meta-learner**: Train a logistic regression on the out-of-fold prediction matrix to learn optimal model weights. This prevents overfitting because each prediction was made without seeing that season's data.
+3. **Final models**: Retrain all 6 base models on the full dataset for inference.
+4. **At prediction time**: Feed a matchup through all 6 base models → stack their outputs → meta-learner produces the final probability.
+
+Scale-sensitive models (Logistic Regression, Gaussian Naive Bayes, stacked meta-learner) use `StandardScaler` via sklearn `Pipeline` to handle the wide feature scale range (BarthagDiff ±0.9 vs MasseyRankDiff ±300). The scaler is fitted per CV fold to prevent data leakage. Tree-based models are scale-invariant and left unnormalized.
+
+**Calibration** ensures a predicted 70% probability actually wins ~70% of the time:
 - **Isotonic** (default) — non-parametric calibration via `CalibratedClassifierCV`
 - **Platt scaling** (`calibrate: "sigmoid"`) — parametric logistic calibration
 - **Temperature scaling** (`calibrate: "temperature"`) — learns a single parameter T on LOSO out-of-fold predictions to minimize log-loss
 
-Evaluation includes per-season LOSO cross-validation, seed-tier calibration diagnostics (Blowout/Competitive/Close matchups), and Expected Calibration Error (ECE).
+Output: `models/saved/model.pkl` (pickled model, loadable at prediction time).
 
-**2. KenPom direct prediction** (fallback)
+#### Step 4 — Evaluate (`marchmadness evaluate`)
 
-If no trained model exists, converts KenPom adjusted efficiency margin difference to win probability via logistic function. The 2026 KenPom ratings for all 365 D-I teams are included (`data/kenpom_2026.csv`).
+Runs full LOSO cross-validation and reports:
+- **Per-season log-loss and Brier score** — measures prediction accuracy for each holdout year
+- **Seed-tier calibration** — groups matchups into Blowout (1-4 vs 13-16), Competitive (5-8 vs 9-12), and Close (same tier) buckets, checks calibration per tier
+- **Expected Calibration Error (ECE)** — bins predictions into deciles, measures gap between predicted and actual win rates
+- **Baseline comparison** — improvement over a seed-only model (how much the 18 features add)
 
-**3. Seed-based historical rates** (last resort)
+### Phase 2: Generating Picks
 
-Uses empirical seed-vs-seed win rates from tournament history, smoothed with a logistic model.
+#### Win Probability — Three-tier fallback
 
-### Optimization Engine
+The `Predictor` class tries three methods in order:
 
-The optimizer uses three complementary techniques:
+1. **ML model** (best) — if `models/saved/model.pkl` exists, builds the 18 features from KenPom + optional external data and runs them through the trained model
+2. **KenPom direct** (good) — converts efficiency margin difference to win probability via logistic function: `P(A wins) = 1 / (1 + 10^(-spread/8))`. The 2026 KenPom ratings for all 365 D-I teams are included (`data/kenpom_2026.csv`)
+3. **Seed-based** (fallback) — empirical seed-vs-seed win rates from tournament history, smoothed with a logistic model
 
-**Analytical EV** — Exact closed-form expected value for each pick:
+This means you can skip training entirely and still get reasonable predictions from KenPom alone.
 
-```
-EV = P(win) * prize_pool / E[survivors | our pick wins]
-```
+#### Tournament Simulation (`marchmadness simulate`)
 
-No Monte Carlo noise. Accounts for opponent ownership (picking a team everyone else picked means you share the prize with more survivors). Uses greedy assignment + local search for multi-entry optimization.
+Runs 50,000 Monte Carlo simulations of the full 63-game bracket:
+1. Pre-compute win probabilities for every possible matchup
+2. For each simulation, play out all 63 games using random draws weighted by win probabilities
+3. Track which teams advance to each round across all simulations
 
-**Nash Equilibrium** — Game-theoretic optimal ownership distribution. At equilibrium, every picked team has equal EV (no profitable deviation). Computed via replicator dynamics:
+This captures **tournament structure correlations** — e.g., two 1-seeds in the same region can't both make the Final Four, and a team's Sweet 16 probability depends on which opponents survive earlier rounds.
 
-1. Start with uniform ownership
-2. Compute EV per team given current ownership
-3. Shift ownership toward higher-EV teams
-4. Repeat until convergence
+Output: `P(team reaches round R)` for each team and round, stored as a `(50000, 63)` NumPy array of winner IDs.
 
-Your edge comes from the gap between Nash (what the field should do) and heuristic (what the field actually does). Against casual pools that overweight chalk, Nash identifies which contrarian picks carry the most value.
+#### Optimization (`marchmadness optimize --day N --method METHOD`)
 
-**Dynamic Programming** — Multi-day planning via backward induction across all 9 contest days. Should you use a 1-seed now (99% safe) or save it for a later day where alternatives are scarce?
+Four optimization methods, all producing the same output format:
 
-For each team, computes:
-- `future_value` = how valuable this team is in future days
-- `scarcity` = how many viable alternatives exist in each future day (double-pick days get extra weight)
-- Adjusted EV = current_day_EV - future_value_penalty
+| Method | Speed | What it does | Best for |
+|--------|-------|-------------|----------|
+| `hybrid` | ~60s | Nash ownership + DP future values + greedy+swap | Default, recommended |
+| `aco` | ~90s | Same as hybrid but uses ACO search instead of greedy+swap | Large portfolios (50+ entries) |
+| `analytical` | ~1s | Heuristic ownership + direct EV optimization, no simulation | Quick iteration |
+| `differentiation` | <1s | Legacy leverage-based greedy picks | Single-pick days only |
 
-Top seeds (1 and 2) get extra preservation multipliers — they're irreplaceable in later rounds when the field thins out. The optimizer strongly prefers burning 3-7 seeds in the Round of 64 and banking 1-seeds for Elite 8 and beyond.
+**What `hybrid` does step by step:**
 
-**Monte Carlo simulation** (50k runs) is used only for computing `P(team reaches round R)` — it captures tournament structure correlations (e.g., two 1-seeds in the same region can't both make the Final Four). All other math is exact.
+1. **Estimate field ownership** — what % of the pool will pick each team? Uses a blend of heuristic (seed-based popularity) and Nash equilibrium (game-theory optimal), weighted by pool sophistication. Accounts for brand recognition bias (Duke 1.4x, UNC 1.3x, etc.) and recency bias (recent champions get a boost).
 
-### Ownership Model
+2. **Compute future values via DP** — backward induction across all 9 contest days. For each team: how valuable is it to save this team for a future day? Factors in advancement probability, scarcity of alternatives, and double-pick day demand. Top seeds (1 and 2) get extra preservation multipliers.
 
-Three modes:
+3. **Select picks** — exact closed-form EV for each candidate:
+   ```
+   EV = P(win) * prize_pool / E[survivors | our pick wins]
+   ```
+   Greedy assignment gives each entry a unique team, then local swap search improves the portfolio. Future value is subtracted as an opportunity cost to discourage burning top seeds early.
 
-- **Heuristic** — Seed-based popularity bias for casual pools (1-seeds get picked ~30-40% of the time, 16-seeds <1%)
-- **Nash** — Mathematically optimal ownership for sharp pools
-- **Blend** — Weighted mix controlled by `pool_sophistication` parameter (recommended)
+4. **Diversify** — concentration penalty prevents stacking all entries on one team. Penalty scales quadratically with exposure, so the optimizer naturally spreads picks across independent games.
 
-Field sophistication is auto-estimated from contest structure: large paid multi-entry contests (22k entries, 150 max/user) get higher sophistication than a 100-person office pool.
+**ACO** replaces step 3-4 with Ant Colony Optimization — 30 ants × 80 generations of probabilistic portfolio construction guided by pheromone trails. Seeded with the greedy solution so it can only improve. Uses pair-level pheromone on double-pick days to capture team synergy.
 
-The ownership model also accounts for:
-- **Brand recognition bias** — blue blood programs (Duke 1.4x, UNC 1.3x, Kentucky 1.3x, Kansas 1.25x, UConn 1.2x) attract disproportionate public picks regardless of seed
-- **Recency bias** — recent champions get a pickup boost (e.g., UConn 1.15x after back-to-back titles)
+#### Ownership Model
 
-All bias parameters are configurable in `config.yaml` under the `ownership:` section.
+Three modes for estimating what the field will pick:
 
-### Portfolio Diversification
+- **Heuristic** — seed-based popularity bias (1-seeds get ~30-40%, 16-seeds <1%)
+- **Nash** — game-theory optimal ownership where every picked team has equal EV
+- **Blend** (default) — weighted mix based on pool sophistication
 
-With multiple entries, the optimizer spreads picks across independent games with a **concentration penalty** — if one team appears in too many entries, a single upset wipes out the entire portfolio. The penalty scales quadratically with exposure, so the optimizer naturally produces varied picks across entries.
+Field sophistication is auto-estimated: large paid multi-entry contests (22k entries, $150/entry) get higher sophistication than a casual office pool. Brand bias and recency bias are applied as multipliers before normalization — configurable in `config.yaml`.
+
+#### Entry Tracking
+
+The `EntryManager` tracks picks and survival across the tournament:
+- Records which teams each entry picked on each day
+- Enforces no-reuse constraint (each team can only be picked once per entry)
+- After results come in (`marchmadness results --day N`), marks entries as eliminated if any pick lost
+- On double-pick days, both picks must win — one loss eliminates the entry
 
 ## Example Output
 
@@ -314,6 +395,7 @@ marchmadness2026/
 │   ├── nash.py                # Nash equilibrium solver
 │   ├── dp.py                  # Dynamic programming planner (9-day)
 │   ├── ownership.py           # Ownership estimation (heuristic/Nash/blend + brand/recency bias)
+│   ├── aco.py                 # Ant Colony Optimization portfolio search
 │   ├── constants.py           # Centralized magic numbers and tuning parameters
 │   ├── portfolio.py           # Portfolio optimizer
 │   ├── survival.py            # Survival probability math
@@ -322,7 +404,7 @@ marchmadness2026/
 ├── entries/
 │   ├── manager.py             # Track picks and eliminations (day-based)
 │   └── generator.py           # Full optimization pipeline
-└── tests/                     # Test suite (130 tests)
+└── tests/                     # Test suite (141 tests)
 ```
 
 ## Tests
@@ -333,7 +415,7 @@ pytest tests/ -v
 make test
 ```
 
-130 tests covering model training (all 8 model types including stacked ensemble pickle round-trip), bracket simulation, analytical EV math, Nash equilibrium convergence, DP future values, KenPom integration, ownership model behavior, and external data integrations (Barttorvik, ESPN BPI).
+141 tests covering model training (all 8 model types including stacked ensemble pickle round-trip), bracket simulation, analytical EV math, Nash equilibrium convergence, DP future values, KenPom integration, ownership model behavior, and external data integrations (Barttorvik, ESPN BPI).
 
 Linting is enforced via [ruff](https://docs.astral.sh/ruff/) with rules for errors, warnings, import sorting, modern Python idioms, and common bugs.
 

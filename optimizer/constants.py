@@ -39,3 +39,14 @@ NASH_TOLERANCE = 1e-8
 NASH_LEARNING_RATE = 0.5
 NASH_MIN_OWNERSHIP = 1e-6
 EQUILIBRIUM_THRESHOLD = 0.05    # Within 5% EV spread = equilibrium
+
+# --- Ant Colony Optimization (aco.py) ---
+ACO_N_ANTS = 30                  # Ants per generation
+ACO_N_ITERATIONS = 80            # Number of generations
+ACO_ALPHA = 1.0                  # Pheromone importance exponent
+ACO_BETA = 2.0                   # Heuristic importance exponent
+ACO_RHO = 0.1                    # Evaporation rate (0-1)
+ACO_ELITE_WEIGHT = 2.0           # Extra pheromone for best-ever solution
+ACO_TOP_K = 5                    # Top ants that deposit pheromone per generation
+ACO_MIN_PHEROMONE = 0.01         # Floor to prevent starvation
+ACO_MAX_PHEROMONE = 10.0         # Ceiling to prevent premature convergence

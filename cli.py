@@ -246,7 +246,7 @@ def schedule(ctx):
 
 @main.command()
 @click.option("--day", "day_num", type=int, required=True, help="Contest day number (1-9)")
-@click.option("--method", default="hybrid", type=click.Choice(["differentiation", "analytical", "hybrid"]))
+@click.option("--method", default="hybrid", type=click.Choice(["differentiation", "analytical", "hybrid", "aco"]))
 @click.option("--pool-size", type=int, default=None, help="Total entries in the contest (default: 10000)")
 @click.option("--num-entries", type=int, default=None, help="Number of your entries (default: from config)")
 @click.option("--max-entries", type=int, default=None, help="Max entries per user allowed (default: 150)")
