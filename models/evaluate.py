@@ -54,6 +54,12 @@ def evaluate_model(
         print("\nPer-Round Calibration:")
         print(round_metrics.to_string(index=False))
 
+    # Per-round calibration chart
+    import os
+    chart_path = os.path.join(output_dir, "calibration_by_round.png")
+    _round_calibration_chart(features_df, model_type, calibrate, save_path=chart_path)
+    print(f"Saved per-round calibration chart to {chart_path}")
+
     return {
         "cv_results": cv_results,
         "seed_baseline": seed_baseline,
@@ -208,10 +214,22 @@ def _round_calibration(
             continue
         rnd_preds = np.clip(preds[mask], 0.01, 0.99)
         rnd_y = y_true[mask]
+        ll = log_loss(rnd_y, rnd_preds)
+        ll_ci_low, ll_ci_high = np.nan, np.nan
+        if mask.sum() >= 30:
+            rng = np.random.default_rng(42)
+            boot_losses = []
+            n = len(rnd_y)
+            for _ in range(1000):
+                idx = rng.integers(0, n, size=n)
+                boot_losses.append(log_loss(rnd_y[idx], rnd_preds[idx]))
+            ll_ci_low, ll_ci_high = np.percentile(boot_losses, [2.5, 97.5])
         results.append({
             "Round": round_names.get(rnd, f"R{rnd}"),
             "N": int(mask.sum()),
-            "LogLoss": log_loss(rnd_y, rnd_preds),
+            "LogLoss": ll,
+            "LogLoss_CI_Low": ll_ci_low,
+            "LogLoss_CI_High": ll_ci_high,
             "BrierScore": brier_score_loss(rnd_y, rnd_preds),
             "MeanPred": rnd_preds.mean(),
             "ActualWinRate": rnd_y.mean(),
@@ -279,3 +297,89 @@ def plot_calibration(
         print(f"Saved calibration plot to {save_path}")
     else:
         plt.show()
+
+
+def _round_calibration_chart(
+    features_df: pd.DataFrame,
+    model_type: str = "xgboost",
+    calibrate: bool = True,
+    save_path: str = "output/calibration_by_round.png",
+) -> None:
+    """Generate 6-panel calibration plot, one per tournament round.
+
+    Each panel shows predicted vs actual win rate in 5 bins,
+    plus a diagonal reference line for perfect calibration.
+    Also shows sample size N in each panel title.
+    """
+    import os
+
+    from models.train import get_model
+
+    if "SeedRoundInteraction" not in features_df.columns or "SeedDiff" not in features_df.columns:
+        return
+
+    # Generate LOSO OOF predictions
+    oof_preds = np.zeros(len(features_df))
+    oof_mask = np.zeros(len(features_df), dtype=bool)
+    seasons = sorted(features_df["Season"].unique())
+
+    for holdout in seasons:
+        train_idx = features_df["Season"] != holdout
+        test_idx = features_df["Season"] == holdout
+        if train_idx.sum() < 50 or test_idx.sum() < 10:
+            continue
+        model = get_model(model_type, calibrate)
+        model.fit(features_df[train_idx], features_df[train_idx]["Result"])
+        oof_preds[test_idx.values] = model.predict_proba(features_df[test_idx])
+        oof_mask |= test_idx.values
+
+    if oof_mask.sum() < 20:
+        return
+
+    df = features_df[oof_mask].copy()
+    preds = oof_preds[oof_mask]
+    y_true = df["Result"].values
+
+    # Recover round numbers
+    seed_diff = df["SeedDiff"].values
+    interaction = df["SeedRoundInteraction"].values
+    rounds = np.where(seed_diff != 0, np.round(interaction / seed_diff).astype(int), 0)
+
+    round_names = {1: "R64", 2: "R32", 3: "S16", 4: "E8", 5: "F4", 6: "Championship"}
+
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    axes = axes.flatten()
+
+    for i, rnd in enumerate(range(1, 7)):
+        ax = axes[i]
+        mask = rounds == rnd
+        n = mask.sum()
+        rnd_name = round_names[rnd]
+
+        ax.plot([0, 1], [0, 1], "k--", alpha=0.5, label="Perfect")
+
+        if n >= 5:
+            rnd_preds = np.clip(preds[mask], 0.01, 0.99)
+            rnd_y = y_true[mask]
+            try:
+                prob_true, prob_pred = calibration_curve(
+                    rnd_y, rnd_preds, n_bins=5, strategy="uniform"
+                )
+                ax.plot(prob_pred, prob_true, "s-", color="#1f77b4", label="Model")
+            except ValueError:
+                pass
+
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_xlabel("Predicted probability")
+        ax.set_ylabel("Actual win rate")
+        ax.set_title(f"{rnd_name} (N={n})")
+        ax.legend(loc="lower right", fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+    plt.suptitle("Per-Round Calibration", fontsize=14, y=1.02)
+    plt.tight_layout()
+
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)

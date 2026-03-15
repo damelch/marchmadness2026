@@ -287,7 +287,24 @@ def build_matchup_features(
                     features["Season"] = season
                     all_rows.append(features)
 
-    return pd.DataFrame(all_rows)
+    df = pd.DataFrame(all_rows)
+
+    # Merge Vegas features if historical data is available
+    try:
+        from data.scrapers.vegas_lines import load_historical_vegas, merge_vegas_with_matchups
+
+        vegas_df = load_historical_vegas()
+        if not vegas_df.empty:
+            df = merge_vegas_with_matchups(df, vegas_df)
+    except Exception:
+        pass
+
+    # Ensure Vegas columns exist even without data
+    for col in ("VegasSpread", "VegasOU"):
+        if col not in df.columns:
+            df[col] = 0.0
+
+    return df
 
 
 def _daynum_to_round(day_num: int) -> int:
@@ -440,6 +457,9 @@ FEATURE_COLUMNS = [
     "BPIDiff",
     "BPIOffDiff",
     "BPIDefDiff",
+    # Vegas betting line features (zero-filled when not available)
+    "VegasSpread",
+    "VegasOU",
 ]
 
 

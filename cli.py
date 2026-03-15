@@ -130,8 +130,9 @@ def train(ctx):
 
 @main.command()
 @click.option("--model-type", default=None, help="Override model type from config")
+@click.option("--output", default="models/saved", help="Directory for calibration charts")
 @click.pass_context
-def evaluate(ctx, model_type):
+def evaluate(ctx, model_type, output):
     """Evaluate model calibration and accuracy."""
     from data.feature_engineering import load_features
     from models.evaluate import evaluate_model
@@ -141,7 +142,7 @@ def evaluate(ctx, model_type):
     calibrate = config["model"]["calibrate"]
 
     features_df = load_features(config["data"]["processed_dir"])
-    evaluate_model(features_df, mt, calibrate)
+    evaluate_model(features_df, mt, calibrate, output_dir=output)
 
 
 @main.command()
@@ -750,6 +751,129 @@ def analyze(ctx, output_dir, n_sims):
         click.echo(f"  Saved: {p}")
 
     click.echo(f"\n{'='*70}")
+
+
+@main.command("fetch-odds")
+@click.option("--historical", is_flag=True, help="Validate historical CSV instead of fetching live")
+@click.option("--save", default=None, help="Save live odds to this CSV path")
+@click.pass_context
+def fetch_odds(ctx, historical, save):
+    """Fetch Vegas betting lines (live or validate historical)."""
+    from data.scrapers.vegas_lines import fetch_current_odds, load_historical_vegas
+
+    if historical:
+        click.echo("Validating historical Vegas lines CSV...")
+        df = load_historical_vegas()
+        if df.empty:
+            click.echo(
+                "No historical Vegas data found.\n"
+                "Place a CSV at data/vegas_historical.csv with columns:\n"
+                "  Season, WTeamID, LTeamID, Spread, OverUnder"
+            )
+        else:
+            click.echo(f"Found {len(df)} rows covering seasons: "
+                        f"{sorted(df['Season'].unique())}")
+    else:
+        click.echo("Fetching live NCAA tournament odds...")
+        save_path = save or "data/vegas_live.csv"
+        df = fetch_current_odds(save_path=save_path)
+        if df.empty:
+            click.echo(
+                "No odds returned. Set ODDS_API_KEY env var or pass --historical.\n"
+                "Get a free key at https://the-odds-api.com"
+            )
+        else:
+            click.echo(f"Fetched odds for {df['HomeTeam'].nunique()} games")
+
+
+@main.command()
+@click.option("--season", default=None, type=int, help="Single season to backtest")
+@click.option("--entries", default=5, help="Number of simulated entries")
+@click.option("--pool", default=10000, help="Simulated pool size")
+@click.option("--prize", default=250000.0, help="Simulated prize pool ($)")
+@click.option("--strategy", default=None, help="Single strategy (optimizer/top_seeds/random/contrarian)")
+@click.pass_context
+def backtest(ctx, season, entries, pool, prize, strategy):
+    """Backtest optimizer against historical tournaments (2015-2024)."""
+    import logging
+
+    from data.feature_engineering import load_features
+    from data.scrapers.kaggle_data import load_dataset
+    from models.backtest import backtest_all, backtest_season
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    config = ctx.obj["config"]
+    raw_dir = config["data"]["raw_dir"]
+    model_type = config["model"]["type"]
+    calibrate = config["model"]["calibrate"]
+
+    click.echo("Loading data...")
+    features_df = load_features(config["data"]["processed_dir"])
+    seeds_df = load_dataset("seeds", raw_dir)
+    results_df = load_dataset("tourney_compact", raw_dir)
+    teams_df = load_dataset("teams", raw_dir)
+
+    strategies = [strategy] if strategy else None
+    seasons = [season] if season else None
+
+    if season:
+        click.echo(f"Backtesting season {season}...")
+        strats = strategies or ["optimizer", "top_seeds", "random", "contrarian"]
+        for strat in strats:
+            result = backtest_season(
+                season=season,
+                features_df=features_df,
+                seeds_df=seeds_df,
+                results_df=results_df,
+                teams_df=teams_df,
+                strategy=strat,
+                n_entries=entries,
+                pool_size=pool,
+                prize_pool=prize,
+                model_type=model_type,
+                calibrate=calibrate,
+            )
+            click.echo(
+                f"  {strat:12s}  survived={result.avg_days_survived:.1f}/{len(result.days_survived)} "
+                f"final_alive={result.final_alive}/{result.n_entries}"
+            )
+    else:
+        click.echo("Running full backtest across all seasons...")
+        summary = backtest_all(
+            features_df=features_df,
+            seeds_df=seeds_df,
+            results_df=results_df,
+            teams_df=teams_df,
+            seasons=seasons,
+            strategies=strategies,
+            n_entries=entries,
+            pool_size=pool,
+            prize_pool=prize,
+            model_type=model_type,
+            calibrate=calibrate,
+        )
+
+        if summary.empty:
+            click.echo("No results — check that data exists for the requested seasons.")
+        else:
+            click.echo(f"\n{'='*70}")
+            click.echo(f"BACKTEST RESULTS ({entries} entries, pool={pool:,})")
+            click.echo(f"{'='*70}")
+            click.echo(f"{'Strategy':<14} {'AvgSurvived':>12} {'BestSeason':>12} {'WorstSeason':>13} {'SurvivalRate':>13}")
+            click.echo("-" * 70)
+
+            for strat in summary["Strategy"].unique():
+                sdf = summary[summary["Strategy"] == strat]
+                avg_surv = sdf["AvgDaysSurvived"].mean()
+                best_idx = sdf["AvgDaysSurvived"].idxmax()
+                worst_idx = sdf["AvgDaysSurvived"].idxmin()
+                best_s = f"{int(sdf.loc[best_idx, 'Season'])} ({sdf.loc[best_idx, 'FinalAlive']}/{entries})"
+                worst_s = f"{int(sdf.loc[worst_idx, 'Season'])} ({sdf.loc[worst_idx, 'FinalAlive']}/{entries})"
+                sr = sdf["SurvivalRate"].mean()
+                click.echo(f"{strat:<14} {avg_surv:>12.1f} {best_s:>12} {worst_s:>13} {sr:>12.1%}")
+
+            click.echo(f"{'='*70}")
 
 
 def _create_demo_bracket():

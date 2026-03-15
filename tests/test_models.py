@@ -79,6 +79,8 @@ class TestSyntheticModel:
                 "BPIDiff": adj_em_diff * 0.8 + rng.normal(0, 2),
                 "BPIOffDiff": rng.normal(0, 3),
                 "BPIDefDiff": rng.normal(0, 3),
+                "VegasSpread": seed_diff * 1.5 + rng.normal(0, 2),
+                "VegasOU": rng.normal(145, 10),
                 "Result": result,
             })
         return pd.DataFrame(rows)

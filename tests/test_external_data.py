@@ -120,5 +120,5 @@ class TestFeatureIntegration:
     def test_feature_columns_count(self):
         from data.feature_engineering import FEATURE_COLUMNS
 
-        # 13 original + 5 new = 18
-        assert len(FEATURE_COLUMNS) == 18
+        # 13 original + 5 external + 2 Vegas = 20
+        assert len(FEATURE_COLUMNS) == 20
