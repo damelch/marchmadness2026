@@ -11,6 +11,8 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss, log_loss
 from sklearn.naive_bayes import GaussianNB
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 try:
     import xgboost as xgb
@@ -107,10 +109,13 @@ def _resolve_calibration_method(calibrate: bool | str) -> str | None:
 
 
 class LogisticBaseline:
-    """Logistic regression baseline model."""
+    """Logistic regression baseline model with feature scaling."""
 
     def __init__(self):
-        self.model = LogisticRegression(C=1.0, max_iter=1000, solver="lbfgs")
+        self.model = Pipeline([
+            ("scaler", StandardScaler()),
+            ("lr", LogisticRegression(C=1.0, max_iter=1000, solver="lbfgs")),
+        ])
 
     def fit(self, X: pd.DataFrame, y: pd.Series) -> None:
         self.model.fit(X[FEATURE_COLUMNS], y)
@@ -264,10 +269,13 @@ class RandomForestModel:
 
 
 class NaiveBayesModel:
-    """Gaussian Naive Bayes model. Provides ensemble diversity."""
+    """Gaussian Naive Bayes model with feature scaling. Provides ensemble diversity."""
 
     def __init__(self):
-        self.model = GaussianNB()
+        self.model = Pipeline([
+            ("scaler", StandardScaler()),
+            ("nb", GaussianNB()),
+        ])
 
     def fit(self, X: pd.DataFrame, y: pd.Series) -> None:
         self.model.fit(X[FEATURE_COLUMNS].values, y)
@@ -286,7 +294,10 @@ class StackedEnsemble:
     def __init__(self, calibrate: bool = True):
         self.calibrate = calibrate
         self.base_models = None
-        self.meta_learner = LogisticRegression(max_iter=1000)
+        self.meta_learner = Pipeline([
+            ("scaler", StandardScaler()),
+            ("lr", LogisticRegression(max_iter=1000)),
+        ])
 
     def _make_base_models(self):
         return [
