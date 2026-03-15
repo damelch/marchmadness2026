@@ -260,11 +260,11 @@ def optimal_multi_entry(
     fv_vals = [future_values.get(t, 0.0) for t in viable]
     max_fv = max(fv_vals) if fv_vals else 1.0
 
-    fv_weight = 0.3  # Base penalty for using high-FV teams now
+    fv_weight = 0.15  # Base penalty for using high-FV teams now
     fv_scale = (max_ev / max_fv) * fv_weight if max_fv > 0 else 0.0
 
     # Top seeds are scarce (only 4 one-seeds across 9 days) — extra penalty
-    SEED_FV_MULTIPLIER = {1: 4.0, 2: 3.5, 3: 1.5}
+    SEED_FV_MULTIPLIER = {1: 2.0, 2: 1.5, 3: 1.2}
 
     team_scores = {}
     for t in viable:
@@ -277,26 +277,44 @@ def optimal_multi_entry(
     # Sort viable teams by score descending
     viable_sorted = sorted(viable, key=lambda t: team_scores.get(t, 0), reverse=True)
 
-    # Greedy assignment: each entry gets a unique team
+    # Greedy assignment: each entry gets a unique team.
+    # Inflate ownership for teams already picked so subsequent entries
+    # see them as less attractive (more concentrated → lower EV).
     picks = []
-    used_this_round = set()
+    used_this_round: dict[int, int] = {}  # team -> count of entries picking it
 
     for entry_idx in range(n_entries):
         used = used_teams_per_entry[entry_idx]
+
+        # Re-score teams with adjusted ownership reflecting prior picks
+        adj_ownership = dict(ownership)
+        for t, count in used_this_round.items():
+            if count > 0:
+                adj_ownership[t] = ownership.get(t, 0) * (1 + 0.3 * count)
+        adj_evs = {t: exact_pick_ev(t, win_probs, adj_ownership, pool_size,
+                                     prize_pool, n_entries) for t in viable}
+        adj_sorted = sorted(viable, key=lambda t: adj_evs.get(t, 0) - (
+            future_values.get(t, 0.0) * fv_scale *
+            SEED_FV_MULTIPLIER.get(available_teams.get(t, 8), 1.0)
+        ), reverse=True)
+
         best_team = None
         best_score = -float("inf")
 
-        for t in viable_sorted:
+        for t in adj_sorted:
             if t in used or t in used_this_round:
                 continue
-            score = team_scores.get(t, 0)
+            score = adj_evs.get(t, 0) - (
+                future_values.get(t, 0.0) * fv_scale *
+                SEED_FV_MULTIPLIER.get(available_teams.get(t, 8), 1.0)
+            )
             if score > best_score:
                 best_score = score
                 best_team = t
 
         if best_team is None:
             # All viable teams used — pick best available ignoring round constraint
-            for t in viable_sorted:
+            for t in adj_sorted:
                 if t in used:
                     continue
                 best_team = t
@@ -306,7 +324,7 @@ def optimal_multi_entry(
             best_team = viable_sorted[0]
 
         picks.append(best_team)
-        used_this_round.add(best_team)
+        used_this_round[best_team] = used_this_round.get(best_team, 0) + 1
 
     # Local search: pairwise swaps using portfolio score (not raw EV)
     # Pre-cache per-pick EVs to avoid redundant recomputation during swaps.
@@ -353,7 +371,7 @@ def optimal_multi_entry(
                 trial = picks.copy()
                 trial[e_idx] = t
                 trial_score = _fast_portfolio_score(trial)
-                if trial_score > current_score * 1.001:
+                if trial_score > current_score * 1.0001:
                     picks[e_idx] = t
                     current_score = trial_score
                     improved = True
@@ -527,7 +545,8 @@ def optimal_day_picks(
         """Penalty for having too many entries depend on the same team.
 
         If one team appears in all N entries, a single upset wipes out
-        the entire portfolio. Penalty scales quadratically with exposure.
+        the entire portfolio. Penalty scales with the cube of exposure
+        to aggressively discourage concentration.
         """
         if len(picks_list) <= 1:
             return 0.0
@@ -535,15 +554,15 @@ def optimal_day_picks(
         team_counts = Counter(t for ps in picks_list for t in ps)
         n = len(picks_list)
         best_ev = max(pair_evs.values()) if pair_evs else 1.0
-        # Penalty: for each team, (fraction of entries exposed)^2
-        # A team on all 5 entries = (5/5)^2 = 1.0 full penalty
-        # A team on 3 of 5 = (3/5)^2 = 0.36
-        # A team on 1 of 5 = (1/5)^2 = 0.04 (negligible)
+        # Cubic penalty: mild for 2/10, severe for 5/10, extreme for 8/10
+        # A team on 2 of 10 = (0.2)^3 = 0.008
+        # A team on 5 of 10 = (0.5)^3 = 0.125
+        # A team on 8 of 10 = (0.8)^3 = 0.512
         penalty = 0.0
         for team_id, count in team_counts.items():
             if count > 1:
                 exposure = count / n
-                penalty += exposure ** 2 * best_ev * 0.4
+                penalty += exposure ** 3 * best_ev * n
         return penalty
 
     def _score_portfolio(picks_list: list[list[int]]) -> float:
@@ -561,24 +580,50 @@ def optimal_day_picks(
         concentration = _portfolio_concentration_penalty(picks_list)
         return total_ev - fv_penalty - concentration
 
-    # Greedy assignment with soft diversity preference
+    # Greedy assignment with dynamic ownership adjustment for diversification.
+    # After each entry picks, inflate ownership for those teams so subsequent
+    # entries see them as less attractive (more opponents → lower EV).
     picks: list[list[int]] = []
     used_teams_count: dict[int, int] = {}  # Track how many entries use each team
+    top_score = pair_scores.get(sorted_pairs[0], 1.0) if sorted_pairs else 1.0
 
     for entry_idx in range(n_entries):
         used = used_teams_per_entry[entry_idx]
+
+        # Build adjusted ownership reflecting teams already picked by prior entries.
+        # Use aggressive inflation so that in large pools (where ownership differences
+        # barely affect EV), repeated teams still become less attractive.
+        adj_ownership = dict(ownership)
+        for t, count in used_teams_count.items():
+            if count > 0:
+                adj_ownership[t] = ownership.get(t, 0) * (1 + 0.5 * count) ** 2
+
         best_pair = None
         best_score = -float("inf")
 
-        for pair in sorted_pairs[:60]:
+        for pair in sorted_pairs[:120]:
             a, b = pair
             if a in used or b in used:
                 continue
-            # Penalize overlap: each additional entry on same team reduces score
-            overlap_penalty = (
-                used_teams_count.get(a, 0) + used_teams_count.get(b, 0)
-            ) * pair_scores.get(sorted_pairs[0], 1.0) * 0.4
-            score = pair_scores.get(pair, 0) - overlap_penalty
+            # Re-score this pair with adjusted ownership
+            adj_ev = exact_day_ev(
+                list(pair), win_probs, adj_ownership, pool_size, prize_pool,
+                num_picks_per_opponent=num_picks, n_our_entries=n_entries,
+                matchup_pairs=matchup_pairs,
+            )
+            fv_cost = 0.0
+            for t in pair:
+                seed = available_teams.get(t, 8)
+                seed_mult = SEED_FV_MULTIPLIER.get(seed, 1.0)
+                fv_cost += future_values.get(t, 0.0) * fv_scale * seed_mult
+            score = adj_ev - fv_cost
+
+            # Quadratic overlap penalty: 1st dupe mild, 2nd+ heavy
+            ca = used_teams_count.get(a, 0)
+            cb = used_teams_count.get(b, 0)
+            overlap_penalty = ((ca + 1) ** 2 + (cb + 1) ** 2 - 2) * top_score * 0.3
+            score -= overlap_penalty
+
             if score > best_score:
                 best_score = score
                 best_pair = pair
@@ -602,7 +647,7 @@ def optimal_day_picks(
 
         for e_idx in range(n_entries):
             used = used_teams_per_entry[e_idx]
-            for pair in sorted_pairs[:50]:
+            for pair in sorted_pairs[:80]:
                 a, b = pair
                 if a in used or b in used:
                     continue
@@ -613,7 +658,7 @@ def optimal_day_picks(
                 trial[e_idx] = list(pair)
                 trial_score = _score_portfolio(trial)
 
-                if trial_score > current_score + 0.01:
+                if trial_score > current_score + 0.001:
                     picks[e_idx] = list(pair)
                     current_score = trial_score
                     improved = True
