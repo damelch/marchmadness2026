@@ -422,7 +422,7 @@ pytest tests/ -v
 make test
 ```
 
-212 tests covering model training (all 8 model types including stacked ensemble pickle round-trip), bracket simulation, analytical EV math, Nash equilibrium convergence, DP future values, KenPom integration, ownership model behavior, and external data integrations (Barttorvik, ESPN BPI).
+212 tests covering model training (all 8 model types including stacked ensemble pickle round-trip), bracket simulation, analytical EV math, Nash equilibrium convergence, DP future values, KenPom integration, ownership model behavior, external data integrations (Barttorvik, ESPN BPI, Vegas lines), backtesting framework (bracket reconstruction, all 4 strategies, schedule validation), and portfolio analysis.
 
 Linting is enforced via [ruff](https://docs.astral.sh/ruff/) with rules for errors, warnings, import sorting, modern Python idioms, and common bugs.
 
