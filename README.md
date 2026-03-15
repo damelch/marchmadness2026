@@ -58,7 +58,9 @@ Or use the Makefile:
 
 ```bash
 make build                  # Build Docker image
-make test                   # Run 111 tests
+make test                   # Run 120 tests
+make lint                   # Ruff lint check (zero violations)
+make format                 # Ruff format check
 make simulate               # 50k Monte Carlo sims
 make optimize-day1          # Day 1 picks (uses config.yaml)
 make optimize-day2          # Day 2 picks
@@ -93,8 +95,17 @@ Trained on 12 seasons of NCAA tournament results (2013-2025, excluding 2020). Fe
 | WinPctDiff | Season record | Win percentage |
 | MasseyRankDiff | Massey Ordinals | Composite ranking |
 | TourneyExpDiff | Historical seeds | Tournament experience |
+| LuckDiff | KenPom / derived | Regression-to-mean indicator |
+| NCSOSDiff | KenPom | Non-conference strength of schedule |
+| SeedRoundInteraction | Derived | Seed advantage amplified by round |
+| AdjEMStdDiff | Box scores | Scoring margin consistency |
 
-Isotonic calibration ensures a predicted 70% probability actually wins ~70% of the time. Evaluated with leave-one-season-out cross-validation.
+Multiple calibration methods ensure a predicted 70% probability actually wins ~70% of the time:
+- **Isotonic** (default) — non-parametric calibration via `CalibratedClassifierCV`
+- **Platt scaling** (`calibrate: "sigmoid"`) — parametric logistic calibration
+- **Temperature scaling** (`calibrate: "temperature"`) — learns a single parameter T on LOSO out-of-fold predictions to minimize log-loss
+
+Evaluation includes per-season LOSO cross-validation, seed-tier calibration diagnostics (Blowout/Competitive/Close matchups), and Expected Calibration Error (ECE).
 
 **2. KenPom direct prediction** (fallback)
 
@@ -145,6 +156,12 @@ Three modes:
 - **Blend** — Weighted mix controlled by `pool_sophistication` parameter (recommended)
 
 Field sophistication is auto-estimated from contest structure: large paid multi-entry contests (22k entries, 150 max/user) get higher sophistication than a 100-person office pool.
+
+The ownership model also accounts for:
+- **Brand recognition bias** — blue blood programs (Duke 1.4x, UNC 1.3x, Kentucky 1.3x, Kansas 1.25x, UConn 1.2x) attract disproportionate public picks regardless of seed
+- **Recency bias** — recent champions get a pickup boost (e.g., UConn 1.15x after back-to-back titles)
+
+All bias parameters are configurable in `config.yaml` under the `ownership:` section.
 
 ### Portfolio Diversification
 
@@ -218,7 +235,20 @@ pool:
 model:
   type: "stacked"         # logistic, xgboost, lightgbm, catboost,
                           # randomforest, naivebayes, ensemble, stacked
-  calibrate: true         # Isotonic calibration for base models
+  calibrate: true         # true/"isotonic", "sigmoid" (Platt), "temperature"
+
+ownership:
+  method: blend           # heuristic, nash, or blend
+  brand_bias:
+    Duke: 1.4
+    North Carolina: 1.3
+    Kentucky: 1.3
+    Kansas: 1.25
+    Connecticut: 1.2
+    UConn: 1.2
+  recency_bias:
+    Connecticut: 1.15
+    UConn: 1.15
 ```
 
 CLI flags override config values: `--pool-size 22000 --num-entries 5 --max-entries 150`
@@ -270,7 +300,8 @@ marchmadness2026/
 │   ├── analytical.py          # Exact closed-form EV (single + double-pick)
 │   ├── nash.py                # Nash equilibrium solver
 │   ├── dp.py                  # Dynamic programming planner (9-day)
-│   ├── ownership.py           # Ownership estimation (heuristic/Nash/blend)
+│   ├── ownership.py           # Ownership estimation (heuristic/Nash/blend + brand/recency bias)
+│   ├── constants.py           # Centralized magic numbers and tuning parameters
 │   ├── portfolio.py           # Portfolio optimizer
 │   ├── survival.py            # Survival probability math
 │   ├── differentiation.py     # Leverage-based pick ranking
@@ -278,7 +309,7 @@ marchmadness2026/
 ├── entries/
 │   ├── manager.py             # Track picks and eliminations (day-based)
 │   └── generator.py           # Full optimization pipeline
-└── tests/                     # Test suite (111 tests)
+└── tests/                     # Test suite (120 tests)
 ```
 
 ## Tests
@@ -289,7 +320,9 @@ pytest tests/ -v
 make test
 ```
 
-111 tests covering model training (all 8 model types including stacked ensemble pickle round-trip), bracket simulation, analytical EV math, Nash equilibrium convergence, DP future values, and KenPom integration.
+120 tests covering model training (all 8 model types including stacked ensemble pickle round-trip), bracket simulation, analytical EV math, Nash equilibrium convergence, DP future values, KenPom integration, and ownership model behavior (brand bias, recency bias, sophistication scaling).
+
+Linting is enforced via [ruff](https://docs.astral.sh/ruff/) with rules for errors, warnings, import sorting, modern Python idioms, and common bugs.
 
 ## License
 
