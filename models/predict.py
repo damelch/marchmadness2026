@@ -165,7 +165,7 @@ class Predictor:
             "TourneyExpDiff": 0.0,
             # New features
             "LuckDiff": float(sa.get("Luck", 0.0)) - float(sb.get("Luck", 0.0)),
-            "NCSOSDiff": float(sa.get("NCSOS", 0.0)) - float(sb.get("NCSOS", 0.0)),
+            "CloseGameDiff": 0.0,  # Not available from KenPom; model uses other features
             "SeedRoundInteraction": seed_diff * round_num,
             "AdjEMStdDiff": float(sa.get("AdjEMStd", 0.0)) - float(sb.get("AdjEMStd", 0.0)),
             # Barttorvik features

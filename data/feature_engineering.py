@@ -56,8 +56,12 @@ def compute_team_stats(detailed_results: pd.DataFrame, season: int) -> pd.DataFr
                     "total_off_eff": 0,
                     "total_def_eff": 0,
                     "total_poss": 0,
+                    "total_scored": 0,
+                    "total_allowed": 0,
                     "opp_ids": [],
                     "game_margins": [],  # per-game efficiency margins for consistency
+                    "close_games": 0,    # games decided by <= 5 points
+                    "close_wins": 0,     # wins in close games
                 }
             stats = team_stats[team_id]
             stats["games"] += 1
@@ -67,8 +71,15 @@ def compute_team_stats(detailed_results: pd.DataFrame, season: int) -> pd.DataFr
             stats["total_off_eff"] += off_eff
             stats["total_def_eff"] += def_eff
             stats["total_poss"] += poss
+            stats["total_scored"] += scored
+            stats["total_allowed"] += allowed
             stats["opp_ids"].append(lid if team_id == wid else wid)
             stats["game_margins"].append(off_eff - def_eff)
+            # Track close games (decided by <= 5 points)
+            margin = abs(scored - allowed)
+            if margin <= 5:
+                stats["close_games"] += 1
+                stats["close_wins"] += int(won)
 
     # Convert to DataFrame
     rows = []
@@ -76,15 +87,32 @@ def compute_team_stats(detailed_results: pd.DataFrame, season: int) -> pd.DataFr
         g = stats["games"]
         if g == 0:
             continue
+
+        win_pct = stats["wins"] / g
+        avg_scored = stats.get("total_scored", 0) / g if g > 0 else 0
+        avg_allowed = stats.get("total_allowed", 0) / g if g > 0 else 0
+
+        # Pythagorean expected win%: scored^11.5 / (scored^11.5 + allowed^11.5)
+        # Exponent 11.5 is standard for college basketball (KenPom uses ~10-12)
+        exp = 11.5
+        if avg_scored > 0 and avg_allowed > 0:
+            pyth_win_pct = avg_scored**exp / (avg_scored**exp + avg_allowed**exp)
+        else:
+            pyth_win_pct = 0.5
+
+        # Luck = actual win% - expected win% (positive = overperforming)
+        luck = win_pct - pyth_win_pct
+
         rows.append(
             {
                 "TeamID": team_id,
                 "Season": season,
-                "WinPct": stats["wins"] / g,
+                "WinPct": win_pct,
                 "RawOE": stats["total_off_eff"] / g,
                 "RawDE": stats["total_def_eff"] / g,
                 "AvgPoss": stats["total_poss"] / g,
                 "Games": g,
+                "Luck": luck,
             }
         )
 
@@ -150,8 +178,17 @@ def compute_team_stats(detailed_results: pd.DataFrame, season: int) -> pd.DataFr
             sos_values.append(0.0)
     team_df["SOS"] = sos_values
 
+    # Close game win% (games decided by <= 5 points) — proxy for tournament readiness
+    close_game_values = []
+    for team_id in team_df.index:
+        cg = team_stats[team_id]["close_games"]
+        cw = team_stats[team_id]["close_wins"]
+        close_game_values.append(cw / cg if cg > 0 else 0.5)
+    team_df["CloseGameWinPct"] = close_game_values
+
     return team_df.reset_index()[
-        ["TeamID", "Season", "WinPct", "AdjO", "AdjD", "AdjEM", "AdjT", "SOS", "AdjEMStd", "Games"]
+        ["TeamID", "Season", "WinPct", "AdjO", "AdjD", "AdjEM", "AdjT",
+         "SOS", "AdjEMStd", "Luck", "CloseGameWinPct", "Games"]
     ]
 
 
@@ -333,15 +370,15 @@ def _compute_pair_features(
 
     # --- New features ---
 
-    # Luck: regression-to-mean indicator (teams with high luck overperformed)
+    # Luck: actual win% minus Pythagorean expected win% (positive = overperforming)
     luck_a = sa.get("Luck", 0.0) if "Luck" in sa.index else 0.0
     luck_b = sb.get("Luck", 0.0) if "Luck" in sb.index else 0.0
     features["LuckDiff"] = float(luck_a) - float(luck_b)
 
-    # Non-conference SOS (battle-tested outside conference play)
-    ncsos_a = sa.get("NCSOS", 0.0) if "NCSOS" in sa.index else 0.0
-    ncsos_b = sb.get("NCSOS", 0.0) if "NCSOS" in sb.index else 0.0
-    features["NCSOSDiff"] = float(ncsos_a) - float(ncsos_b)
+    # Close game win% — proxy for tournament readiness (clutch performance)
+    cg_a = sa.get("CloseGameWinPct", 0.5) if "CloseGameWinPct" in sa.index else 0.5
+    cg_b = sb.get("CloseGameWinPct", 0.5) if "CloseGameWinPct" in sb.index else 0.5
+    features["CloseGameDiff"] = float(cg_a) - float(cg_b)
 
     # Seed-round interaction (being a 1-seed in R64 vs E8 is different)
     features["SeedRoundInteraction"] = seed_diff * round_num
@@ -393,7 +430,7 @@ FEATURE_COLUMNS = [
     "MasseyRankDiff",
     "TourneyExpDiff",
     "LuckDiff",
-    "NCSOSDiff",
+    "CloseGameDiff",
     "SeedRoundInteraction",
     "AdjEMStdDiff",
     # Barttorvik features

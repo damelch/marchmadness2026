@@ -48,11 +48,18 @@ def evaluate_model(
         print("\nPer-Seed-Tier Calibration:")
         print(tier_metrics.to_string(index=False))
 
+    # Round-level calibration
+    round_metrics = _round_calibration(features_df, model_type, calibrate)
+    if round_metrics is not None:
+        print("\nPer-Round Calibration:")
+        print(round_metrics.to_string(index=False))
+
     return {
         "cv_results": cv_results,
         "seed_baseline": seed_baseline,
         "improvement": improvement,
         "tier_metrics": tier_metrics,
+        "round_metrics": round_metrics,
     }
 
 
@@ -141,6 +148,74 @@ def _seed_tier_calibration(
             "BrierScore": brier_score_loss(tier_y, tier_preds),
             "MeanPred": tier_preds.mean(),
             "ActualWinRate": tier_y.mean(),
+        })
+
+    return pd.DataFrame(results) if results else None
+
+
+def _round_calibration(
+    features_df: pd.DataFrame,
+    model_type: str = "xgboost",
+    calibrate: bool = True,
+) -> pd.DataFrame | None:
+    """Compute calibration metrics by tournament round.
+
+    Uses LOSO predictions to avoid overfitting.  Requires SeedRoundInteraction
+    feature (which encodes round info) or falls back to DayNum if available.
+    """
+    from models.train import get_model
+
+    # We can infer round from SeedRoundInteraction / SeedDiff
+    # SeedRoundInteraction = SeedDiff * round_num, so round = interaction / seed_diff
+    if "SeedRoundInteraction" not in features_df.columns or "SeedDiff" not in features_df.columns:
+        return None
+
+    # Generate OOF predictions
+    oof_preds = np.zeros(len(features_df))
+    oof_mask = np.zeros(len(features_df), dtype=bool)
+    seasons = sorted(features_df["Season"].unique())
+
+    for holdout in seasons:
+        train_idx = features_df["Season"] != holdout
+        test_idx = features_df["Season"] == holdout
+        if train_idx.sum() < 50 or test_idx.sum() < 10:
+            continue
+        model = get_model(model_type, calibrate)
+        model.fit(features_df[train_idx], features_df[train_idx]["Result"])
+        oof_preds[test_idx.values] = model.predict_proba(features_df[test_idx])
+        oof_mask |= test_idx.values
+
+    if oof_mask.sum() < 20:
+        return None
+
+    df = features_df[oof_mask].copy()
+    preds = oof_preds[oof_mask]
+    y_true = df["Result"].values
+
+    # Recover round number: SeedRoundInteraction / SeedDiff (when SeedDiff != 0)
+    seed_diff = df["SeedDiff"].values
+    interaction = df["SeedRoundInteraction"].values
+    rounds = np.where(seed_diff != 0, np.round(interaction / seed_diff).astype(int), 0)
+
+    round_names = {1: "R64", 2: "R32", 3: "S16", 4: "E8", 5: "F4", 6: "Championship"}
+
+    results = []
+    for rnd in sorted(set(rounds)):
+        if rnd < 1 or rnd > 6:
+            continue
+        mask = rounds == rnd
+        if mask.sum() < 10:
+            continue
+        rnd_preds = np.clip(preds[mask], 0.01, 0.99)
+        rnd_y = y_true[mask]
+        results.append({
+            "Round": round_names.get(rnd, f"R{rnd}"),
+            "N": int(mask.sum()),
+            "LogLoss": log_loss(rnd_y, rnd_preds),
+            "BrierScore": brier_score_loss(rnd_y, rnd_preds),
+            "MeanPred": rnd_preds.mean(),
+            "ActualWinRate": rnd_y.mean(),
+            "ECE": compute_ece(rnd_y, rnd_preds),
         })
 
     return pd.DataFrame(results) if results else None

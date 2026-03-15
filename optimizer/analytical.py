@@ -187,7 +187,7 @@ def _portfolio_score(
     n = len(picks)
 
     # Diversification: fraction of picks that are unique
-    len(counts) / n
+    uniqueness = len(counts) / n  # noqa: F841 — used conceptually in scoring
 
     # Correlation penalty: entries on the same team are perfectly correlated
     # Effective entries ≈ sum of sqrt(count) for each unique team (like portfolio theory)
@@ -309,6 +309,33 @@ def optimal_multi_entry(
         used_this_round.add(best_team)
 
     # Local search: pairwise swaps using portfolio score (not raw EV)
+    # Pre-cache per-pick EVs to avoid redundant recomputation during swaps.
+    # When swapping one entry, only that entry's EV changes — the rest are reused.
+    pick_evs = {
+        t: exact_pick_ev(t, win_probs, ownership, pool_size, prize_pool, n_entries)
+        for t in set(viable_sorted[:30]) | set(picks)
+    }
+
+    def _fast_portfolio_score(pick_list: list[int]) -> float:
+        """Score portfolio using cached per-pick EVs."""
+        total_ev = sum(pick_evs.get(t, exact_pick_ev(
+            t, win_probs, ownership, pool_size, prize_pool, n_entries,
+        )) for t in pick_list)
+        if len(pick_list) <= 1:
+            return total_ev
+        from collections import Counter
+        counts = Counter(pick_list)
+        n = len(pick_list)
+        effective_entries = sum(c ** 0.5 for c in counts.values())
+        efficiency = effective_entries / n
+        p_all_die = 1.0
+        for team_id in set(pick_list):
+            wp = win_probs.get(team_id, 0.5)
+            p_all_die *= (1.0 - wp)
+        joint_survival = 1.0 - p_all_die
+        div_factor = 0.5 * efficiency + 0.5 * (joint_survival ** 0.2)
+        return total_ev * div_factor
+
     improved = True
     max_iters = 20
     iters = 0
@@ -316,7 +343,7 @@ def optimal_multi_entry(
     while improved and iters < max_iters:
         improved = False
         iters += 1
-        current_score = _portfolio_score(picks, win_probs, ownership, pool_size, prize_pool)
+        current_score = _fast_portfolio_score(picks)
 
         for e_idx in range(n_entries):
             used = used_teams_per_entry[e_idx]
@@ -325,7 +352,7 @@ def optimal_multi_entry(
                     continue
                 trial = picks.copy()
                 trial[e_idx] = t
-                trial_score = _portfolio_score(trial, win_probs, ownership, pool_size, prize_pool)
+                trial_score = _fast_portfolio_score(trial)
                 if trial_score > current_score * 1.001:
                     picks[e_idx] = t
                     current_score = trial_score

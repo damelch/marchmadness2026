@@ -18,7 +18,6 @@ from optimizer.analytical import (
     _portfolio_score,
     exact_day_ev,
     exact_pick_ev,
-    optimal_day_picks,
 )
 from optimizer.constants import (
     ACO_ALPHA,
@@ -111,6 +110,69 @@ def aco_optimize(
 # ---------------------------------------------------------------------------
 
 
+def _greedy_seed_single(
+    n_entries: int,
+    viable: list[int],
+    heuristic: dict[int, float],
+    used_teams_per_entry: list[set[int]],
+) -> list[int]:
+    """Fast greedy assignment for ACO seeding (no swap search)."""
+    viable_sorted = sorted(viable, key=lambda t: heuristic.get(t, 0), reverse=True)
+    picks: list[int] = []
+    used_this_round: set[int] = set()
+
+    for entry_idx in range(n_entries):
+        used = used_teams_per_entry[entry_idx]
+        chosen = None
+        for t in viable_sorted:
+            if t not in used and t not in used_this_round:
+                chosen = t
+                break
+        if chosen is None:
+            for t in viable_sorted:
+                if t not in used:
+                    chosen = t
+                    break
+        if chosen is None:
+            chosen = viable_sorted[0]
+        picks.append(chosen)
+        used_this_round.add(chosen)
+
+    return picks
+
+
+def _greedy_seed_double(
+    n_entries: int,
+    valid_pairs: list[tuple[int, int]],
+    pair_heuristic: dict[tuple[int, int], float],
+    used_teams_per_entry: list[set[int]],
+) -> list[list[int]]:
+    """Fast greedy assignment for double-pick ACO seeding (no swap search)."""
+    sorted_pairs = sorted(valid_pairs, key=lambda p: pair_heuristic.get(p, 0), reverse=True)
+    picks: list[list[int]] = []
+    used_count: dict[int, int] = {}
+
+    for entry_idx in range(n_entries):
+        used = used_teams_per_entry[entry_idx]
+        chosen = None
+        for pair in sorted_pairs[:60]:
+            a, b = pair
+            if a in used or b in used:
+                continue
+            overlap = used_count.get(a, 0) + used_count.get(b, 0)
+            if chosen is None or overlap == 0:
+                chosen = pair
+                if overlap == 0:
+                    break
+        if chosen is None:
+            chosen = sorted_pairs[0]
+        picks.append(list(chosen))
+        for t in chosen:
+            used_count[t] = used_count.get(t, 0) + 1
+
+    return picks
+
+
 def _aco_single_pick(
     n_entries: int,
     available_teams: dict[int, int],
@@ -148,13 +210,8 @@ def _aco_single_pick(
     # Initialize pheromone uniformly
     pheromone = {t: 1.0 for t in viable}
 
-    # Get greedy seed solution
-    greedy_picks = optimal_day_picks(
-        n_entries, available_teams, win_probs, ownership, pool_size,
-        prize_pool, 1, used_teams_per_entry, min_win_prob, future_values,
-        matchup_pairs,
-    )
-    greedy_flat = [ps[0] for ps in greedy_picks]
+    # Get greedy seed solution (fast — no swap search, just heuristic-sorted assignment)
+    greedy_flat = _greedy_seed_single(n_entries, viable, heuristic, used_teams_per_entry)
     greedy_score = _score_single_portfolio(
         greedy_flat, win_probs, ownership, pool_size, prize_pool,
     )
@@ -386,12 +443,8 @@ def _aco_double_pick(
     # Initialize pheromone on pairs
     pheromone: dict[tuple[int, int], float] = {p: 1.0 for p in valid_pairs}
 
-    # Get greedy seed solution
-    greedy_picks = optimal_day_picks(
-        n_entries, available_teams, win_probs, ownership, pool_size,
-        prize_pool, 2, used_teams_per_entry, min_win_prob, future_values,
-        matchup_pairs,
-    )
+    # Get greedy seed solution (fast — no swap search)
+    greedy_picks = _greedy_seed_double(n_entries, valid_pairs, pair_heuristic, used_teams_per_entry)
     greedy_score = _score_double_portfolio(
         greedy_picks, win_probs, ownership, pool_size, prize_pool,
         n_entries, matchup_pairs, future_values,

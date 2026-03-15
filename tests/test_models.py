@@ -71,7 +71,7 @@ class TestSyntheticModel:
                 "MasseyRankDiff": -seed_diff * 5 + rng.normal(0, 10),
                 "TourneyExpDiff": rng.integers(-3, 4),
                 "LuckDiff": rng.normal(0, 0.05),
-                "NCSOSDiff": rng.normal(0, 3),
+                "CloseGameDiff": rng.normal(0, 0.3),
                 "SeedRoundInteraction": seed_diff * rng.integers(1, 7),
                 "AdjEMStdDiff": rng.normal(0, 5),
                 "BarthagDiff": rng.normal(0, 0.2),

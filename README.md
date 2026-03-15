@@ -134,8 +134,8 @@ Transforms raw box scores into 18 matchup features. Each feature is a **differen
 | WinPctDiff | Season record | Win percentage |
 | MasseyRankDiff | Massey Ordinals | Composite ranking |
 | TourneyExpDiff | Historical seeds | Tournament experience |
-| LuckDiff | KenPom / derived | Regression-to-mean indicator |
-| NCSOSDiff | KenPom | Non-conference strength of schedule |
+| LuckDiff | Box scores / KenPom | Win% minus Pythagorean expected win% |
+| CloseGameDiff | Box scores | Win% in games decided by ≤ 5 points |
 | SeedRoundInteraction | Derived | Seed advantage amplified by round |
 | AdjEMStdDiff | Box scores | Scoring margin consistency |
 | BarthagDiff | Barttorvik | Predicted win% vs average D-I team |
