@@ -43,18 +43,49 @@ each day** to maximize your expected payout.
 
 ## Step-by-Step Setup
 
-Open a terminal (Command Prompt on Windows, Terminal on Mac).
+Open a terminal:
+- **Windows**: Press `Win + R`, type `cmd`, press Enter
+- **Mac**: Open **Terminal** (search for it in Spotlight with `Cmd + Space`)
+- **Linux**: Open your terminal app
 
 ### 1. Download this project
+
+#### Option A — With Git (recommended)
+
+If you already have Git installed:
 
 ```bash
 git clone https://github.com/damelch/marchmadness2026.git
 cd marchmadness2026
 ```
 
-> **Don't have git?** Download the ZIP from GitHub instead: click the green
-> **Code** button → **Download ZIP**, then unzip it and open a terminal in
-> that folder.
+#### Option B — Install Git first
+
+**Windows:**
+1. Download Git from [gitforwindows.org](https://gitforwindows.org/)
+2. Run the installer — accept all defaults
+3. Close and reopen your terminal, then run the `git clone` command above
+
+**Mac:**
+1. Open Terminal and type `git`. If it's not installed, macOS will prompt
+   you to install the Command Line Developer Tools — click **Install**
+2. Once installed, run the `git clone` command above
+
+**Linux:**
+```bash
+sudo apt install git    # Ubuntu/Debian
+sudo dnf install git    # Fedora
+```
+Then run the `git clone` command above.
+
+#### Option C — No Git at all
+
+1. Go to [github.com/damelch/marchmadness2026](https://github.com/damelch/marchmadness2026)
+2. Click the green **Code** button → **Download ZIP**
+3. Unzip the file
+4. Open a terminal and navigate into the unzipped folder:
+   - **Windows**: `cd C:\Users\<YourName>\Downloads\marchmadness2026-main`
+   - **Mac/Linux**: `cd ~/Downloads/marchmadness2026-main`
 
 ### 2. Build the tool
 
