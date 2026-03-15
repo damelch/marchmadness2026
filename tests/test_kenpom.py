@@ -1,11 +1,9 @@
 """Tests for KenPom data integration."""
 
-import pytest
-import pandas as pd
 from data.kenpom import (
-    load_kenpom,
-    kenpom_to_team_stats,
     kenpom_predict_matchup,
+    kenpom_to_team_stats,
+    load_kenpom,
 )
 
 

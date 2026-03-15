@@ -1,9 +1,8 @@
 """Fetch live bracket and game data from ESPN's public API."""
 
-import requests
-import pandas as pd
-from datetime import datetime
 
+import pandas as pd
+import requests
 
 ESPN_SCOREBOARD_URL = (
     "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard"

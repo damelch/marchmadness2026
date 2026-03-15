@@ -4,10 +4,9 @@ Reads kenpom_2026.csv and produces team_stats DataFrames compatible
 with the existing Predictor and feature_engineering pipeline.
 """
 
-import pandas as pd
-import numpy as np
 from pathlib import Path
 
+import pandas as pd
 
 # Known name mismatches between KenPom and Kaggle MTeams.csv
 KENPOM_TO_KAGGLE_NAME = {
@@ -161,6 +160,8 @@ def kenpom_to_team_stats(
             "SOS": float(row["SOS"]),
             "WinPct": float(row["WinPct"]),
             "KenpomRank": int(row["Rk"]),
+            "Luck": float(row.get("Luck", 0.0)),
+            "NCSOS": float(row.get("NCSOS", 0.0)),
         })
 
     return pd.DataFrame(rows)

@@ -1,15 +1,15 @@
 """Tests for dynamic programming multi-round planner."""
 
 import numpy as np
-import pytest
-from simulation.engine import TournamentBracket, simulate_tournament
+
 from data.seed_history import get_seed_win_prob
 from optimizer.dp import (
-    compute_round_win_probs,
     compute_advancement_probs,
-    team_scarcity,
     compute_future_values,
+    compute_round_win_probs,
+    team_scarcity,
 )
+from simulation.engine import TournamentBracket, simulate_tournament
 
 
 def _make_bracket_and_sim():
@@ -21,9 +21,10 @@ def _make_bracket_and_sim():
             bracket.set_seed(team_id, seed, region, name=f"{region}{seed}")
             team_id += 1
 
-    predict_fn = lambda a, b: get_seed_win_prob(
-        bracket.teams[a]["seed"], bracket.teams[b]["seed"]
-    )
+    def predict_fn(a, b):
+        return get_seed_win_prob(
+            bracket.teams[a]["seed"], bracket.teams[b]["seed"]
+        )
 
     sim_results = simulate_tournament(bracket, predict_fn, n_sims=500, rng_seed=42)
     return bracket, predict_fn, sim_results

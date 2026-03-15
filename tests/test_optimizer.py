@@ -1,9 +1,8 @@
 """Tests for survivor pool optimizer."""
 
-import pytest
-from optimizer.ownership import estimate_ownership
-from optimizer.survival import survival_probability, leverage_score, single_entry_ev
 from optimizer.kelly import optimal_entries
+from optimizer.ownership import estimate_ownership
+from optimizer.survival import leverage_score, survival_probability
 
 
 class TestOwnership:

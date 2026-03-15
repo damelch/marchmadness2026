@@ -1,9 +1,10 @@
 """Command-line interface for the March Madness Survivor Pool Optimizer."""
 
-import click
-import yaml
-import pandas as pd
 from pathlib import Path
+
+import click
+import pandas as pd
+import yaml
 
 from contest.schedule import ContestSchedule
 
@@ -42,8 +43,8 @@ def download(ctx):
 @click.pass_context
 def features(ctx):
     """Build feature matrix from raw data."""
-    from data.scrapers.kaggle_data import load_dataset
     from data.feature_engineering import build_matchup_features, save_features
+    from data.scrapers.kaggle_data import load_dataset
 
     config = ctx.obj["config"]
     raw_dir = config["data"]["raw_dir"]
@@ -77,7 +78,7 @@ def features(ctx):
 def train(ctx):
     """Train win probability model."""
     from data.feature_engineering import load_features
-    from models.train import train_model, save_model
+    from models.train import save_model, train_model
 
     config = ctx.obj["config"]
     model_type = config["model"]["type"]
@@ -112,9 +113,9 @@ def evaluate(ctx, model_type):
 @click.pass_context
 def simulate(ctx):
     """Run Monte Carlo tournament simulation (requires bracket)."""
-    from simulation.engine import simulate_tournament, team_advancement_probs, TournamentBracket
-    from models.train import load_model
     from models.predict import Predictor
+    from models.train import load_model
+    from simulation.engine import simulate_tournament, team_advancement_probs
 
     config = ctx.obj["config"]
     n_sims = config["simulation"]["num_sims"]
@@ -129,9 +130,10 @@ def simulate(ctx):
 
         from data.seed_history import get_seed_win_prob
         bracket = _create_demo_bracket()
-        predict_fn = lambda a, b: get_seed_win_prob(
-            bracket.teams[a]["seed"], bracket.teams[b]["seed"]
-        )
+        def predict_fn(a, b):
+            return get_seed_win_prob(
+                    bracket.teams[a]["seed"], bracket.teams[b]["seed"]
+                )
     else:
         import json
         with open(bracket_path) as f:
@@ -161,9 +163,10 @@ def simulate(ctx):
             click.echo("No trained model — using KenPom ratings")
         else:
             from data.seed_history import get_seed_win_prob
-            predict_fn = lambda a, b: get_seed_win_prob(
-                bracket.teams[a]["seed"], bracket.teams[b]["seed"]
-            )
+            def predict_fn(a, b):
+                return get_seed_win_prob(
+                            bracket.teams[a]["seed"], bracket.teams[b]["seed"]
+                        )
             click.echo("No trained model or KenPom data — using seed-based probabilities")
 
     click.echo(f"Running {n_sims:,} simulations...")
@@ -203,7 +206,7 @@ def schedule(ctx):
 
     click.echo(f"{'-'*60}")
     click.echo(f"Total: {sched.total_days()} days, {total_picks} picks")
-    click.echo(f"* = double-pick day (both picks must win)")
+    click.echo("* = double-pick day (both picks must win)")
 
 
 @main.command()
@@ -288,7 +291,7 @@ def optimize(ctx, day_num, method, pool_size, num_entries, max_entries):
     click.echo(f"PICK RECOMMENDATIONS - Day {day_num} ({day.label})")
     click.echo(f"  Pool: {pool_size_actual:,} entries | Prize: ${prize_pool_actual:,.0f} | Max/user: {max_ent}")
     if day.is_double_pick:
-        click.echo(f"  ** Double-pick day: both picks must win to survive **")
+        click.echo("  ** Double-pick day: both picks must win to survive **")
     click.echo(f"{'='*70}")
 
     for entry_id, team_ids in results.get("recommendations", {}).items():
@@ -310,7 +313,7 @@ def optimize(ctx, day_num, method, pool_size, num_entries, max_entries):
 
     if "evaluation" in results:
         ev = results["evaluation"]
-        click.echo(f"\nPortfolio Analysis:")
+        click.echo("\nPortfolio Analysis:")
         click.echo(f"  Total EV: ${ev.get('total_ev', 0):.2f}")
         if "joint_survival" in ev:
             click.echo(f"  Joint survival: {ev['joint_survival']:.1%}")

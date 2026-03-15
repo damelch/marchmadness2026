@@ -1,12 +1,11 @@
 """Generate win probability predictions for matchups."""
 
-import numpy as np
-import pandas as pd
 from pathlib import Path
 
-from data.feature_engineering import FEATURE_COLUMNS, compute_team_stats, compute_massey_composite
+import pandas as pd
+
 from data.seed_history import get_seed_win_prob
-from models.train import load_model, WinProbabilityModel
+from models.train import WinProbabilityModel, load_model
 
 
 class Predictor:
@@ -72,7 +71,7 @@ class Predictor:
             kenpom_id_to_name=id_to_name,
         )
 
-    def predict_matchup(self, team_a: int, team_b: int) -> float:
+    def predict_matchup(self, team_a: int, team_b: int, round_num: int = 1) -> float:
         """Predict P(team_a wins) for a single matchup.
 
         Priority:
@@ -82,7 +81,7 @@ class Predictor:
         """
         # 1. ML model
         if self.model is not None and self.team_stats is not None:
-            features = self._build_features(team_a, team_b)
+            features = self._build_features(team_a, team_b, round_num=round_num)
             if features is not None:
                 df = pd.DataFrame([features])
                 return float(self.model.predict_proba(df)[0])
@@ -128,7 +127,7 @@ class Predictor:
                 cache[(b, a)] = 1.0 - p
         return cache
 
-    def _build_features(self, team_a: int, team_b: int) -> dict | None:
+    def _build_features(self, team_a: int, team_b: int, round_num: int = 1) -> dict | None:
         """Build feature dict for a matchup."""
         seed_a = self.seed_map.get(team_a)
         seed_b = self.seed_map.get(team_b)
@@ -142,8 +141,10 @@ class Predictor:
 
         sa, sb = sa.iloc[0], sb.iloc[0]
 
+        seed_diff = seed_b - seed_a
+
         features = {
-            "SeedDiff": seed_b - seed_a,
+            "SeedDiff": seed_diff,
             "AdjODiff": sa["AdjO"] - sb["AdjO"],
             "AdjDDiff": sa["AdjD"] - sb["AdjD"],
             "AdjEMDiff": sa["AdjEM"] - sb["AdjEM"],
@@ -152,6 +153,11 @@ class Predictor:
             "WinPctDiff": sa["WinPct"] - sb["WinPct"],
             "MasseyRankDiff": 0.0,
             "TourneyExpDiff": 0.0,
+            # New features
+            "LuckDiff": float(sa.get("Luck", 0.0)) - float(sb.get("Luck", 0.0)),
+            "NCSOSDiff": float(sa.get("NCSOS", 0.0)) - float(sb.get("NCSOS", 0.0)),
+            "SeedRoundInteraction": seed_diff * round_num,
+            "AdjEMStdDiff": float(sa.get("AdjEMStd", 0.0)) - float(sb.get("AdjEMStd", 0.0)),
         }
 
         if self.massey is not None:

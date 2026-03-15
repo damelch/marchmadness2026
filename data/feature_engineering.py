@@ -1,8 +1,10 @@
 """Build matchup features for win probability modeling."""
 
-import pandas as pd
-import numpy as np
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
 from data.seed_history import parse_seed
 
 
@@ -55,14 +57,18 @@ def compute_team_stats(detailed_results: pd.DataFrame, season: int) -> pd.DataFr
                     "total_def_eff": 0,
                     "total_poss": 0,
                     "opp_ids": [],
+                    "game_margins": [],  # per-game efficiency margins for consistency
                 }
             stats = team_stats[team_id]
             stats["games"] += 1
             stats["wins"] += int(won)
-            stats["total_off_eff"] += (scored / poss) * 100
-            stats["total_def_eff"] += (allowed / poss) * 100
+            off_eff = (scored / poss) * 100
+            def_eff = (allowed / poss) * 100
+            stats["total_off_eff"] += off_eff
+            stats["total_def_eff"] += def_eff
             stats["total_poss"] += poss
             stats["opp_ids"].append(lid if team_id == wid else wid)
+            stats["game_margins"].append(off_eff - def_eff)
 
     # Convert to DataFrame
     rows = []
@@ -126,6 +132,13 @@ def compute_team_stats(detailed_results: pd.DataFrame, season: int) -> pd.DataFr
     team_df["AdjEM"] = team_df["AdjO"] - team_df["AdjD"]
     team_df["AdjT"] = team_df["AvgPoss"]
 
+    # Compute scoring margin consistency (std dev of per-game margins)
+    em_std_values = []
+    for team_id in team_df.index:
+        margins = team_stats[team_id]["game_margins"]
+        em_std_values.append(float(np.std(margins)) if len(margins) > 1 else 0.0)
+    team_df["AdjEMStd"] = em_std_values
+
     # Compute SOS as average opponent AdjEM
     sos_values = []
     for team_id in team_df.index:
@@ -138,7 +151,7 @@ def compute_team_stats(detailed_results: pd.DataFrame, season: int) -> pd.DataFr
     team_df["SOS"] = sos_values
 
     return team_df.reset_index()[
-        ["TeamID", "Season", "WinPct", "AdjO", "AdjD", "AdjEM", "AdjT", "SOS", "Games"]
+        ["TeamID", "Season", "WinPct", "AdjO", "AdjD", "AdjEM", "AdjT", "SOS", "AdjEMStd", "Games"]
     ]
 
 
@@ -220,12 +233,17 @@ def build_matchup_features(
             winner_id = game["WTeamID"]
             loser_id = game["LTeamID"]
 
+            # Derive round number from DayNum (Kaggle convention)
+            day_num = game.get("DayNum", 136)
+            round_num = _daynum_to_round(day_num)
+
             for team_a, team_b, result in [
                 (winner_id, loser_id, 1),
                 (loser_id, winner_id, 0),
             ]:
                 features = _compute_pair_features(
-                    team_a, team_b, season, seed_map, team_stats, massey, tourney_exp
+                    team_a, team_b, season, seed_map, team_stats, massey, tourney_exp,
+                    round_num=round_num,
                 )
                 if features is not None:
                     features["Result"] = result
@@ -233,6 +251,25 @@ def build_matchup_features(
                     all_rows.append(features)
 
     return pd.DataFrame(all_rows)
+
+
+def _daynum_to_round(day_num: int) -> int:
+    """Map Kaggle DayNum to tournament round (1-6).
+
+    Kaggle convention: R64 starts ~DayNum 136-137, R32 ~138-139, etc.
+    """
+    if day_num <= 137:
+        return 1  # Round of 64
+    elif day_num <= 139:
+        return 2  # Round of 32
+    elif day_num <= 144:
+        return 3  # Sweet 16
+    elif day_num <= 146:
+        return 4  # Elite 8
+    elif day_num <= 152:
+        return 5  # Final Four
+    else:
+        return 6  # Championship
 
 
 def _compute_pair_features(
@@ -243,6 +280,7 @@ def _compute_pair_features(
     team_stats: pd.DataFrame,
     massey: pd.DataFrame | None,
     tourney_exp: pd.DataFrame,
+    round_num: int = 1,
 ) -> dict | None:
     """Compute feature dict for a single A-vs-B matchup."""
     seed_a = seed_map.get(team_a)
@@ -258,12 +296,14 @@ def _compute_pair_features(
     sa = stats_a.iloc[0]
     sb = stats_b.iloc[0]
 
+    seed_diff = seed_b - seed_a  # positive = A is favored
+
     features = {
         "TeamA": team_a,
         "TeamB": team_b,
         "SeedA": seed_a,
         "SeedB": seed_b,
-        "SeedDiff": seed_b - seed_a,  # positive = A is favored
+        "SeedDiff": seed_diff,
         "AdjODiff": sa["AdjO"] - sb["AdjO"],
         "AdjDDiff": sa["AdjD"] - sb["AdjD"],  # lower is better for defense
         "AdjEMDiff": sa["AdjEM"] - sb["AdjEM"],
@@ -291,6 +331,26 @@ def _compute_pair_features(
         - (exp_b.iloc[0]["TourneyExp"] if not exp_b.empty else 0)
     )
 
+    # --- New features ---
+
+    # Luck: regression-to-mean indicator (teams with high luck overperformed)
+    luck_a = sa.get("Luck", 0.0) if "Luck" in sa.index else 0.0
+    luck_b = sb.get("Luck", 0.0) if "Luck" in sb.index else 0.0
+    features["LuckDiff"] = float(luck_a) - float(luck_b)
+
+    # Non-conference SOS (battle-tested outside conference play)
+    ncsos_a = sa.get("NCSOS", 0.0) if "NCSOS" in sa.index else 0.0
+    ncsos_b = sb.get("NCSOS", 0.0) if "NCSOS" in sb.index else 0.0
+    features["NCSOSDiff"] = float(ncsos_a) - float(ncsos_b)
+
+    # Seed-round interaction (being a 1-seed in R64 vs E8 is different)
+    features["SeedRoundInteraction"] = seed_diff * round_num
+
+    # Scoring margin consistency (lower std = more consistent team)
+    em_std_a = sa.get("AdjEMStd", 0.0) if "AdjEMStd" in sa.index else 0.0
+    em_std_b = sb.get("AdjEMStd", 0.0) if "AdjEMStd" in sb.index else 0.0
+    features["AdjEMStdDiff"] = float(em_std_a) - float(em_std_b)
+
     return features
 
 
@@ -304,6 +364,10 @@ FEATURE_COLUMNS = [
     "WinPctDiff",
     "MasseyRankDiff",
     "TourneyExpDiff",
+    "LuckDiff",
+    "NCSOSDiff",
+    "SeedRoundInteraction",
+    "AdjEMStdDiff",
 ]
 
 

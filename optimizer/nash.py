@@ -6,8 +6,8 @@ No player can improve their expected payout by unilaterally changing their pick.
 Uses replicator dynamics / multiplicative weights to converge to equilibrium.
 """
 
-import math
 import numpy as np
+
 from optimizer.analytical import exact_pick_ev
 
 

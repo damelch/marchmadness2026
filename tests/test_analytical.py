@@ -1,14 +1,13 @@
 """Tests for analytical (closed-form) EV calculations."""
 
-import pytest
 from optimizer.analytical import (
+    _find_opponent,
+    exact_day_ev,
     exact_pick_ev,
     exact_round_ev,
-    exact_day_ev,
     field_survival_rate,
-    optimal_multi_entry,
     optimal_day_picks,
-    _find_opponent,
+    optimal_multi_entry,
 )
 
 

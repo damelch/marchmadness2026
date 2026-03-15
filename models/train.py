@@ -7,11 +7,9 @@ from typing import Protocol
 import numpy as np
 import pandas as pd
 from sklearn.calibration import CalibratedClassifierCV
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import LeaveOneGroupOut
-from sklearn.metrics import log_loss, brier_score_loss
-
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import brier_score_loss, log_loss
 from sklearn.naive_bayes import GaussianNB
 
 try:
@@ -29,12 +27,83 @@ try:
 except ImportError:
     cb = None
 
+from scipy.optimize import minimize_scalar
+from scipy.special import expit
+from scipy.special import logit as sp_logit
+
 from data.feature_engineering import FEATURE_COLUMNS
 
 
 class WinProbabilityModel(Protocol):
     def fit(self, X: pd.DataFrame, y: pd.Series) -> None: ...
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray: ...
+
+
+class TemperatureScaledModel:
+    """Post-hoc temperature scaling wrapper for any model.
+
+    Learns a single temperature parameter T on held-out data to minimize log-loss.
+    calibrated_prob = sigmoid(logit(raw_prob) / T)
+
+    T > 1 softens predictions (less confident), T < 1 sharpens.
+    """
+
+    def __init__(self, base_model: WinProbabilityModel):
+        self.base_model = base_model
+        self.temperature = 1.0
+
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> None:
+        """Fit base model, then learn temperature via LOSO OOF predictions."""
+        self.base_model.fit(X, y)
+
+        # Generate OOF predictions for temperature calibration
+        if "Season" in X.columns:
+            oof_preds = np.zeros(len(X))
+            oof_mask = np.zeros(len(X), dtype=bool)
+            seasons = sorted(X["Season"].unique())
+
+            for holdout in seasons:
+                train_idx = X["Season"] != holdout
+                test_idx = X["Season"] == holdout
+                if train_idx.sum() < 50 or test_idx.sum() < 10:
+                    continue
+                fold_model = type(self.base_model)()
+                fold_model.fit(X[train_idx], y[train_idx])
+                oof_preds[test_idx.values] = fold_model.predict_proba(X[test_idx])
+                oof_mask |= test_idx.values
+
+            if oof_mask.sum() > 20:
+                self._fit_temperature(oof_preds[oof_mask], y[oof_mask].values)
+
+    def _fit_temperature(self, preds: np.ndarray, y_true: np.ndarray) -> None:
+        """Find optimal temperature T that minimizes log-loss."""
+        preds_clipped = np.clip(preds, 1e-6, 1 - 1e-6)
+        logits = sp_logit(preds_clipped)
+
+        def neg_log_loss(T):
+            scaled = expit(logits / T)
+            scaled = np.clip(scaled, 1e-6, 1 - 1e-6)
+            return -np.mean(y_true * np.log(scaled) + (1 - y_true) * np.log(1 - scaled))
+
+        result = minimize_scalar(neg_log_loss, bounds=(0.1, 10.0), method="bounded")
+        self.temperature = result.x
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        raw = self.base_model.predict_proba(X)
+        raw_clipped = np.clip(raw, 1e-6, 1 - 1e-6)
+        logits = sp_logit(raw_clipped)
+        return expit(logits / self.temperature)
+
+
+def _resolve_calibration_method(calibrate: bool | str) -> str | None:
+    """Resolve calibration parameter to sklearn method name or None."""
+    if calibrate is False:
+        return None
+    if calibrate is True or calibrate == "isotonic":
+        return "isotonic"
+    if calibrate == "sigmoid":
+        return "sigmoid"
+    return None
 
 
 class LogisticBaseline:
@@ -51,9 +120,14 @@ class LogisticBaseline:
 
 
 class XGBoostModel:
-    """XGBoost model with isotonic calibration."""
+    """XGBoost model with optional calibration.
 
-    def __init__(self, calibrate: bool = True):
+    Args:
+        calibrate: True or "isotonic" for isotonic calibration,
+                   "sigmoid" for Platt scaling, False for no calibration.
+    """
+
+    def __init__(self, calibrate: bool | str = True):
         if xgb is None:
             raise ImportError("xgboost is required. Install with: pip install xgboost")
         self.calibrate = calibrate
@@ -73,9 +147,10 @@ class XGBoostModel:
 
     def fit(self, X: pd.DataFrame, y: pd.Series) -> None:
         features = X[FEATURE_COLUMNS].values
-        if self.calibrate:
+        cal_method = _resolve_calibration_method(self.calibrate)
+        if cal_method:
             self.model = CalibratedClassifierCV(
-                self.base_model, method="isotonic", cv=5
+                self.base_model, method=cal_method, cv=5
             )
         else:
             self.model = self.base_model
@@ -106,7 +181,7 @@ class EnsembleModel:
 class LightGBMModel:
     """LightGBM gradient boosting model."""
 
-    def __init__(self, calibrate: bool = True):
+    def __init__(self, calibrate: bool | str = True):
         if lgb is None:
             raise ImportError("lightgbm is required. Install with: pip install lightgbm")
         self.calibrate = calibrate
@@ -126,9 +201,10 @@ class LightGBMModel:
 
     def fit(self, X: pd.DataFrame, y: pd.Series) -> None:
         features = X[FEATURE_COLUMNS].values
-        if self.calibrate:
+        cal_method = _resolve_calibration_method(self.calibrate)
+        if cal_method:
             self.model = CalibratedClassifierCV(
-                self.base_model, method="isotonic", cv=5
+                self.base_model, method=cal_method, cv=5
             )
         else:
             self.model = self.base_model
@@ -141,7 +217,7 @@ class LightGBMModel:
 class CatBoostModel:
     """CatBoost gradient boosting model."""
 
-    def __init__(self, calibrate: bool = True):
+    def __init__(self, calibrate: bool | str = True):
         if cb is None:
             raise ImportError("catboost is required. Install with: pip install catboost")
         self.calibrate = calibrate
@@ -156,9 +232,10 @@ class CatBoostModel:
 
     def fit(self, X: pd.DataFrame, y: pd.Series) -> None:
         features = X[FEATURE_COLUMNS].values
-        if self.calibrate:
+        cal_method = _resolve_calibration_method(self.calibrate)
+        if cal_method:
             self.model = CalibratedClassifierCV(
-                self.base_model, method="isotonic", cv=5
+                self.base_model, method=cal_method, cv=5
             )
         else:
             self.model = self.base_model
@@ -257,21 +334,34 @@ class StackedEnsemble:
         return self.meta_learner.predict_proba(base_preds)[:, 1]
 
 
-def get_model(model_type: str = "xgboost", calibrate: bool = True) -> WinProbabilityModel:
-    """Factory function for models."""
+def get_model(model_type: str = "xgboost", calibrate: bool | str = True) -> WinProbabilityModel:
+    """Factory function for models.
+
+    Args:
+        model_type: Model architecture to use
+        calibrate: True/"isotonic" for isotonic, "sigmoid" for Platt,
+                   "temperature" for temperature scaling, False for none
+    """
+    use_temp = calibrate == "temperature"
+    inner_calibrate = False if use_temp else calibrate
+
     models = {
         "logistic": lambda: LogisticBaseline(),
-        "xgboost": lambda: XGBoostModel(calibrate=calibrate),
-        "lightgbm": lambda: LightGBMModel(calibrate=calibrate),
-        "catboost": lambda: CatBoostModel(calibrate=calibrate),
+        "xgboost": lambda: XGBoostModel(calibrate=inner_calibrate),
+        "lightgbm": lambda: LightGBMModel(calibrate=inner_calibrate),
+        "catboost": lambda: CatBoostModel(calibrate=inner_calibrate),
         "randomforest": lambda: RandomForestModel(),
         "naivebayes": lambda: NaiveBayesModel(),
-        "ensemble": lambda: EnsembleModel(calibrate=calibrate),
-        "stacked": lambda: StackedEnsemble(calibrate=calibrate),
+        "ensemble": lambda: EnsembleModel(calibrate=inner_calibrate),
+        "stacked": lambda: StackedEnsemble(calibrate=inner_calibrate),
     }
     if model_type not in models:
         raise ValueError(f"Unknown model type: {model_type}. Choose from {list(models.keys())}")
-    return models[model_type]()
+
+    model = models[model_type]()
+    if use_temp:
+        model = TemperatureScaledModel(model)
+    return model
 
 
 def train_model(
@@ -281,7 +371,6 @@ def train_model(
 ) -> WinProbabilityModel:
     """Train a win probability model on the full feature dataset."""
     model = get_model(model_type, calibrate)
-    X = features_df[FEATURE_COLUMNS]
     y = features_df["Result"]
     model.fit(features_df, y)
     return model

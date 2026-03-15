@@ -1,7 +1,7 @@
 """Tests for day-based entry manager."""
 
-import json
 import pytest
+
 from entries.manager import Entry, EntryManager
 
 

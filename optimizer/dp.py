@@ -6,10 +6,10 @@ or save them for later days where they may be more valuable.
 Updated to work with day-based contest schedule (9 days, 12 picks).
 """
 
-import math
 import numpy as np
+
+from optimizer.analytical import exact_day_ev, exact_pick_ev
 from simulation.engine import TournamentBracket
-from optimizer.analytical import exact_pick_ev, exact_day_ev
 
 
 def compute_round_win_probs(

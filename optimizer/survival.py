@@ -1,7 +1,6 @@
 """Core survival probability math for survivor pool optimization."""
 
 import math
-import numpy as np
 
 
 def survival_probability(round_win_probs: list[float]) -> float:
@@ -98,7 +97,7 @@ def pick_ev(
 
     # Simple model: after this round,
     # expected opponents surviving = pool_size * (opp_round_survival) * opp_future_survival
-    opp_round_survival = team_ownership * 1.0  # those who picked our team and it won
+    team_ownership * 1.0  # those who picked our team and it won
     # Plus others who picked a winning team (we approximate this)
 
     our_full_survival = team_win_prob * future_survival

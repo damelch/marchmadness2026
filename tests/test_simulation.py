@@ -1,7 +1,7 @@
 """Tests for the tournament simulation engine."""
 
 import numpy as np
-import pytest
+
 from simulation.engine import TournamentBracket, simulate_tournament, team_advancement_probs
 
 

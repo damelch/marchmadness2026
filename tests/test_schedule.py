@@ -1,6 +1,7 @@
 """Tests for contest schedule module."""
 
 import pytest
+
 from contest.schedule import ContestDay, ContestSchedule
 from simulation.engine import TournamentBracket
 

@@ -1,8 +1,8 @@
 """Historical seed-vs-seed win rates for the NCAA tournament."""
 
-import pandas as pd
+
 import numpy as np
-from pathlib import Path
+import pandas as pd
 
 
 def parse_seed(seed_str: str) -> int:

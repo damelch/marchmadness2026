@@ -2,9 +2,9 @@
 
 import numpy as np
 import pandas as pd
-import pytest
-from data.seed_history import parse_seed, get_seed_win_prob
+
 from data.feature_engineering import FEATURE_COLUMNS
+from data.seed_history import get_seed_win_prob, parse_seed
 
 
 def test_parse_seed():
@@ -70,6 +70,10 @@ class TestSyntheticModel:
                 "WinPctDiff": seed_diff * 0.02 + rng.normal(0, 0.1),
                 "MasseyRankDiff": -seed_diff * 5 + rng.normal(0, 10),
                 "TourneyExpDiff": rng.integers(-3, 4),
+                "LuckDiff": rng.normal(0, 0.05),
+                "NCSOSDiff": rng.normal(0, 3),
+                "SeedRoundInteraction": seed_diff * rng.integers(1, 7),
+                "AdjEMStdDiff": rng.normal(0, 5),
                 "Result": result,
             })
         return pd.DataFrame(rows)
@@ -150,6 +154,7 @@ class TestSyntheticModel:
 
     def test_stacked_model_pickleable(self):
         import pickle
+
         from models.train import StackedEnsemble
         df = self._make_synthetic_data(n=300)
         model = StackedEnsemble(calibrate=False)

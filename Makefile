@@ -1,4 +1,4 @@
-.PHONY: build test simulate optimize-day1 optimize-day2 optimize-all clean
+.PHONY: build test simulate optimize-day1 optimize-day2 optimize-all clean lint format
 
 IMAGE := marchmadness
 DATA := $(CURDIR)/data
@@ -52,6 +52,13 @@ optimize-all: build
 
 optimize-day%: build
 	$(DOCKER_RUN) $(IMAGE) optimize --day $* $(OPT_FLAGS)
+
+# ── Code Quality ────────────────────────────────────────────────────
+lint: build
+	docker run --rm --entrypoint ruff $(IMAGE) check .
+
+format: build
+	docker run --rm --entrypoint ruff $(IMAGE) format --check .
 
 # ── Utilities ────────────────────────────────────────────────────────
 reset:

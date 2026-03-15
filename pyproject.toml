@@ -27,6 +27,7 @@ dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",
     "ruff>=0.1",
+    "mypy>=1.8",
 ]
 
 [project.scripts]
@@ -40,6 +41,28 @@ include = ["data*", "models*", "optimizer*", "simulation*", "entries*", "contest
 
 [tool.ruff]
 line-length = 100
+exclude = ["build"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+    "E501",   # line length handled by formatter
+    "E741",   # ambiguous variable names (common in math-heavy code)
+    "B007",   # unused loop variable (common in iteration patterns)
+    "B905",   # zip strict param (noisy for our codebase)
+    "RUF012", # mutable class defaults (intentional for config)
+    "RUF059", # unpacked unused vars (common in destructuring)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["data", "models", "optimizer", "simulation", "entries", "contest"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+check_untyped_defs = true
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

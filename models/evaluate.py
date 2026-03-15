@@ -1,13 +1,12 @@
 """Evaluate model calibration and accuracy."""
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 from sklearn.calibration import calibration_curve
-from sklearn.metrics import log_loss, brier_score_loss
+from sklearn.metrics import brier_score_loss, log_loss
 
-from models.train import cross_validate, WinProbabilityModel
-from data.feature_engineering import FEATURE_COLUMNS
+from models.train import WinProbabilityModel, cross_validate
 
 
 def evaluate_model(
@@ -28,25 +27,32 @@ def evaluate_model(
         print("No cross-validation results (not enough data)")
         return {"cv_results": cv_results}
 
-    print(f"\nLeave-One-Season-Out Cross-Validation:")
+    print("\nLeave-One-Season-Out Cross-Validation:")
     print(f"  Mean Log-Loss:    {cv_results['LogLoss'].mean():.4f} (+/- {cv_results['LogLoss'].std():.4f})")
     print(f"  Mean Brier Score: {cv_results['BrierScore'].mean():.4f} (+/- {cv_results['BrierScore'].std():.4f})")
-    print(f"\nPer-Season Results:")
+    print("\nPer-Season Results:")
     print(cv_results.to_string(index=False))
 
     # Seed-based baseline comparison
     seed_baseline = _seed_baseline_scores(features_df)
-    print(f"\nSeed-Based Baseline:")
+    print("\nSeed-Based Baseline:")
     print(f"  Log-Loss:    {seed_baseline['log_loss']:.4f}")
     print(f"  Brier Score: {seed_baseline['brier_score']:.4f}")
 
     improvement = (seed_baseline["log_loss"] - cv_results["LogLoss"].mean()) / seed_baseline["log_loss"]
     print(f"\nModel improvement over seed baseline: {improvement:.1%}")
 
+    # Seed-tier calibration
+    tier_metrics = _seed_tier_calibration(features_df, model_type, calibrate)
+    if tier_metrics is not None:
+        print("\nPer-Seed-Tier Calibration:")
+        print(tier_metrics.to_string(index=False))
+
     return {
         "cv_results": cv_results,
         "seed_baseline": seed_baseline,
         "improvement": improvement,
+        "tier_metrics": tier_metrics,
     }
 
 
@@ -70,6 +76,94 @@ def _seed_baseline_scores(features_df: pd.DataFrame) -> dict:
     }
 
 
+def _seed_tier_calibration(
+    features_df: pd.DataFrame,
+    model_type: str = "xgboost",
+    calibrate: bool = True,
+) -> pd.DataFrame | None:
+    """Compute calibration metrics by seed tier.
+
+    Tiers: Blowouts (1-4 vs 13-16), Competitive (5-8 vs 9-12), Close (same tier).
+    Uses LOSO predictions to avoid overfitting.
+    """
+    from models.train import get_model
+
+    if "SeedA" not in features_df.columns or "SeedB" not in features_df.columns:
+        return None
+
+    # Generate OOF predictions
+    oof_preds = np.zeros(len(features_df))
+    oof_mask = np.zeros(len(features_df), dtype=bool)
+    seasons = sorted(features_df["Season"].unique())
+
+    for holdout in seasons:
+        train_idx = features_df["Season"] != holdout
+        test_idx = features_df["Season"] == holdout
+        if train_idx.sum() < 50 or test_idx.sum() < 10:
+            continue
+        model = get_model(model_type, calibrate)
+        model.fit(features_df[train_idx], features_df[train_idx]["Result"])
+        oof_preds[test_idx.values] = model.predict_proba(features_df[test_idx])
+        oof_mask |= test_idx.values
+
+    if oof_mask.sum() < 20:
+        return None
+
+    df = features_df[oof_mask].copy()
+    preds = oof_preds[oof_mask]
+    y_true = df["Result"].values
+
+    # Classify seed tiers
+    def _tier(seed_a, seed_b):
+        higher, lower = min(seed_a, seed_b), max(seed_a, seed_b)
+        if higher <= 4 and lower >= 13:
+            return "Blowout (1-4 vs 13-16)"
+        elif higher <= 4 and lower <= 4:
+            return "Close (top vs top)"
+        elif higher >= 5 and higher <= 8 and lower >= 9 and lower <= 12:
+            return "Competitive (5-8 vs 9-12)"
+        else:
+            return "Other"
+
+    tiers = [_tier(int(r["SeedA"]), int(r["SeedB"])) for _, r in df.iterrows()]
+
+    results = []
+    for tier in sorted(set(tiers)):
+        mask = np.array([t == tier for t in tiers])
+        if mask.sum() < 10:
+            continue
+        tier_preds = np.clip(preds[mask], 0.01, 0.99)
+        tier_y = y_true[mask]
+        results.append({
+            "Tier": tier,
+            "N": int(mask.sum()),
+            "LogLoss": log_loss(tier_y, tier_preds),
+            "BrierScore": brier_score_loss(tier_y, tier_preds),
+            "MeanPred": tier_preds.mean(),
+            "ActualWinRate": tier_y.mean(),
+        })
+
+    return pd.DataFrame(results) if results else None
+
+
+def compute_ece(y_true: np.ndarray, y_pred: np.ndarray, n_bins: int = 10) -> float:
+    """Compute Expected Calibration Error (ECE).
+
+    ECE = sum_bins(|actual - predicted| * fraction_in_bin)
+    Lower is better. 0 = perfectly calibrated.
+    """
+    bin_edges = np.linspace(0, 1, n_bins + 1)
+    ece = 0.0
+    for i in range(n_bins):
+        mask = (y_pred >= bin_edges[i]) & (y_pred < bin_edges[i + 1])
+        if mask.sum() == 0:
+            continue
+        bin_acc = y_true[mask].mean()
+        bin_conf = y_pred[mask].mean()
+        ece += abs(bin_acc - bin_conf) * mask.sum() / len(y_true)
+    return ece
+
+
 def plot_calibration(
     features_df: pd.DataFrame,
     model: WinProbabilityModel,
@@ -83,12 +177,15 @@ def plot_calibration(
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
+    # ECE
+    ece = compute_ece(y_true, preds)
+
     # Calibration curve
     ax1.plot(prob_pred, prob_true, "s-", label="Model")
     ax1.plot([0, 1], [0, 1], "k--", label="Perfect calibration")
     ax1.set_xlabel("Predicted probability")
     ax1.set_ylabel("Actual win rate")
-    ax1.set_title("Calibration Curve")
+    ax1.set_title(f"Calibration Curve (ECE={ece:.4f})")
     ax1.legend()
     ax1.grid(True, alpha=0.3)
 

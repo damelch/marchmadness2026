@@ -71,9 +71,26 @@ contest:
       picks: 1
       regions: ["FF"]
 
+ownership:
+  method: blend
+  brand_bias:
+    Duke: 1.4
+    North Carolina: 1.3
+    Kentucky: 1.3
+    Kansas: 1.25
+    Connecticut: 1.2
+    UConn: 1.2
+    UCLA: 1.15
+    Michigan St.: 1.1
+    Gonzaga: 1.1
+    Villanova: 1.1
+  recency_bias:
+    Connecticut: 1.15  # back-to-back champ 2023-2024
+    UConn: 1.15
+
 model:
   type: "xgboost"  # "logistic", "xgboost", "ensemble"
-  calibrate: true
+  calibrate: true  # true/"isotonic", "sigmoid" (Platt), "temperature"
   historical_seasons:
     - 2013
     - 2014

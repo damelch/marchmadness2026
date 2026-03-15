@@ -1,10 +1,9 @@
 """Download and load NCAA tournament data from Kaggle."""
 
-from pathlib import Path
 import zipfile
-import pandas as pd
-import requests
+from pathlib import Path
 
+import pandas as pd
 
 KAGGLE_DATASETS = {
     "teams": "MTeams.csv",

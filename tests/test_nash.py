@@ -1,8 +1,8 @@
 """Tests for Nash equilibrium solver."""
 
-import pytest
 import numpy as np
-from optimizer.nash import nash_equilibrium, best_response, verify_equilibrium, blended_ownership
+
+from optimizer.nash import best_response, blended_ownership, nash_equilibrium, verify_equilibrium
 
 
 class TestNashEquilibrium:

@@ -1,8 +1,6 @@
 """Approach A: Greedy leverage-based pick optimization with differentiation."""
 
-import numpy as np
 from optimizer.survival import leverage_score
-from optimizer.ownership import estimate_ownership
 from simulation.engine import TournamentBracket
 
 

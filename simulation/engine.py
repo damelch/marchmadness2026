@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
 import numpy as np
-from dataclasses import dataclass, field
-from typing import Callable
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 @dataclass
@@ -31,7 +36,6 @@ class TournamentBracket:
 
     def _build_bracket_structure(self) -> None:
         """Build the 63-game bracket tree."""
-        slot_idx = 0
 
         # Rounds 1-4: regional games (per region)
         for region_idx, region in enumerate(self.REGIONS):

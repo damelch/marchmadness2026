@@ -4,9 +4,7 @@ Replaces Monte Carlo for single-round evaluation. Instant and exact.
 Supports both single-pick and double-pick contest days.
 """
 
-import math
 from itertools import combinations
-import numpy as np
 
 
 def field_survival_rate(
@@ -189,7 +187,7 @@ def _portfolio_score(
     n = len(picks)
 
     # Diversification: fraction of picks that are unique
-    unique_ratio = len(counts) / n
+    len(counts) / n
 
     # Correlation penalty: entries on the same team are perfectly correlated
     # Effective entries ≈ sum of sqrt(count) for each unique team (like portfolio theory)

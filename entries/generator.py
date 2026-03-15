@@ -7,21 +7,21 @@ Updated for day-based contest schedule with double-pick support.
 
 from __future__ import annotations
 
-import yaml
-import numpy as np
-import pandas as pd
+import math
 from pathlib import Path
 
-from simulation.engine import TournamentBracket, simulate_tournament
-from models.predict import Predictor
-from optimizer.ownership import estimate_ownership_from_bracket
-from optimizer.analytical import exact_round_ev, exact_day_ev, optimal_day_picks
-from optimizer.nash import nash_equilibrium, best_response, verify_equilibrium
-from optimizer.dp import compute_round_win_probs, compute_advancement_probs, dp_optimal_picks
-from optimizer.differentiation import optimize_multi_entry, generate_differentiation_report
-from optimizer.kelly import optimal_entries
-from entries.manager import EntryManager
+import yaml
+
 from contest.schedule import ContestSchedule
+from entries.manager import EntryManager
+from models.predict import Predictor
+from optimizer.analytical import exact_day_ev, exact_round_ev, optimal_day_picks
+from optimizer.differentiation import generate_differentiation_report, optimize_multi_entry
+from optimizer.dp import compute_advancement_probs, compute_round_win_probs, dp_optimal_picks
+from optimizer.kelly import optimal_entries
+from optimizer.nash import best_response, nash_equilibrium, verify_equilibrium
+from optimizer.ownership import estimate_ownership_from_bracket
+from simulation.engine import TournamentBracket, simulate_tournament
 
 
 def load_config(path: str | Path = "config.yaml") -> dict:
@@ -342,5 +342,3 @@ def kelly_analysis(
     )
 
 
-# Need math.prod for Python 3.11
-import math

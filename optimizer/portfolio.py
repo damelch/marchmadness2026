@@ -8,8 +8,9 @@ Single-round EV calculations use optimizer.analytical (exact, instant).
 """
 
 import numpy as np
-from simulation.engine import TournamentBracket
+
 from optimizer.analytical import exact_round_ev, optimal_multi_entry
+from simulation.engine import TournamentBracket
 
 
 def evaluate_portfolio(
