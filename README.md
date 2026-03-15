@@ -58,7 +58,7 @@ Or use the Makefile:
 
 ```bash
 make build                  # Build Docker image
-make test                   # Run 120 tests
+make test                   # Run 130 tests
 make lint                   # Ruff lint check (zero violations)
 make format                 # Ruff format check
 make simulate               # 50k Monte Carlo sims
@@ -99,6 +99,17 @@ Trained on 12 seasons of NCAA tournament results (2013-2025, excluding 2020). Fe
 | NCSOSDiff | KenPom | Non-conference strength of schedule |
 | SeedRoundInteraction | Derived | Seed advantage amplified by round |
 | AdjEMStdDiff | Box scores | Scoring margin consistency |
+| BarthagDiff | Barttorvik | Predicted win% vs average D-I team |
+| WABDiff | Barttorvik | Wins Above Bubble (quality metric) |
+| BPIDiff | ESPN BPI | Independent power index rating |
+| BPIOffDiff | ESPN BPI | Offensive strength per 70 possessions |
+| BPIDefDiff | ESPN BPI | Defensive strength per 70 possessions |
+
+Barttorvik and ESPN BPI features are optional — the model gracefully defaults to 0 if the data isn't available. Fetch them with:
+```bash
+marchmadness fetch-bpi          # ESPN BPI (free, no auth)
+marchmadness fetch-barttorvik   # Barttorvik T-Rank (free, may need manual CSV)
+```
 
 Multiple calibration methods ensure a predicted 70% probability actually wins ~70% of the time:
 - **Isotonic** (default) — non-parametric calibration via `CalibratedClassifierCV`
@@ -283,7 +294,9 @@ marchmadness2026/
 ├── data/
 │   ├── scrapers/
 │   │   ├── kaggle_data.py     # Historical NCAA data
-│   │   └── espn_api.py        # Live bracket & scores
+│   │   ├── espn_api.py        # Live bracket & scores
+│   │   ├── espn_bpi.py        # ESPN BPI ratings (free, no auth)
+│   │   └── barttorvik.py      # Barttorvik T-Rank ratings (free)
 │   ├── feature_engineering.py # KenPom-style features from box scores
 │   ├── seed_history.py        # Historical seed-vs-seed win rates
 │   ├── kenpom.py              # KenPom ratings integration
@@ -309,7 +322,7 @@ marchmadness2026/
 ├── entries/
 │   ├── manager.py             # Track picks and eliminations (day-based)
 │   └── generator.py           # Full optimization pipeline
-└── tests/                     # Test suite (120 tests)
+└── tests/                     # Test suite (130 tests)
 ```
 
 ## Tests
@@ -320,7 +333,7 @@ pytest tests/ -v
 make test
 ```
 
-120 tests covering model training (all 8 model types including stacked ensemble pickle round-trip), bracket simulation, analytical EV math, Nash equilibrium convergence, DP future values, KenPom integration, and ownership model behavior (brand bias, recency bias, sophistication scaling).
+130 tests covering model training (all 8 model types including stacked ensemble pickle round-trip), bracket simulation, analytical EV math, Nash equilibrium convergence, DP future values, KenPom integration, ownership model behavior, and external data integrations (Barttorvik, ESPN BPI).
 
 Linting is enforced via [ruff](https://docs.astral.sh/ruff/) with rules for errors, warnings, import sorting, modern Python idioms, and common bugs.
 

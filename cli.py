@@ -39,6 +39,41 @@ def download(ctx):
     click.echo("Done!")
 
 
+@main.command("fetch-bpi")
+@click.option("--year", default=2026, help="Season year")
+@click.pass_context
+def fetch_bpi(ctx, year):
+    """Fetch ESPN BPI ratings (no auth required)."""
+    from data.scrapers.espn_bpi import fetch_espn_bpi
+
+    path = f"data/espn_bpi_{year}.csv"
+    click.echo(f"Fetching ESPN BPI data for {year}...")
+    df = fetch_espn_bpi(year=year, save_path=path)
+    if not df.empty:
+        click.echo(f"Saved {len(df)} teams to {path}")
+    else:
+        click.echo("Failed to fetch BPI data. Check network connection.")
+
+
+@main.command("fetch-barttorvik")
+@click.option("--year", default=2026, help="Season year")
+@click.pass_context
+def fetch_barttorvik(ctx, year):
+    """Fetch Barttorvik T-Rank ratings."""
+    from data.scrapers.barttorvik import fetch_barttorvik
+
+    path = f"data/barttorvik_{year}.csv"
+    click.echo(f"Fetching Barttorvik data for {year}...")
+    df = fetch_barttorvik(year=year, save_path=path)
+    if not df.empty:
+        click.echo(f"Saved {len(df)} teams to {path}")
+    else:
+        click.echo(
+            "Could not fetch Barttorvik data (may require browser).\n"
+            f"Manually save T-Rank table as {path} from https://barttorvik.com/trank.php"
+        )
+
+
 @main.command()
 @click.pass_context
 def features(ctx):

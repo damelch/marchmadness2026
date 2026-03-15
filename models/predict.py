@@ -45,11 +45,15 @@ class Predictor:
         teams_csv: str | Path = "data/raw/MTeams.csv",
         model_path: str | Path | None = "models/saved/model.pkl",
         seed_map: dict[int, int] | None = None,
+        barttorvik_path: str | Path | None = None,
+        espn_bpi_path: str | Path | None = None,
     ) -> "Predictor":
         """Create a Predictor using KenPom ratings as team stats.
 
         If a trained model exists, uses KenPom stats as features for the ML model.
         Otherwise, falls back to KenPom-based direct prediction.
+
+        Optionally merges Barttorvik and ESPN BPI data for additional features.
         """
         from data.kenpom import load_kenpom, load_kenpom_as_team_stats
 
@@ -58,6 +62,12 @@ class Predictor:
 
         # Build ID -> name mapping for KenPom direct prediction fallback
         id_to_name = dict(zip(team_stats["TeamID"], team_stats["TeamName"]))
+
+        # Merge Barttorvik data if available
+        team_stats = _merge_barttorvik(team_stats, barttorvik_path, teams_csv)
+
+        # Merge ESPN BPI data if available
+        team_stats = _merge_espn_bpi(team_stats, espn_bpi_path, teams_csv)
 
         model = None
         if model_path and Path(model_path).exists():
@@ -158,6 +168,13 @@ class Predictor:
             "NCSOSDiff": float(sa.get("NCSOS", 0.0)) - float(sb.get("NCSOS", 0.0)),
             "SeedRoundInteraction": seed_diff * round_num,
             "AdjEMStdDiff": float(sa.get("AdjEMStd", 0.0)) - float(sb.get("AdjEMStd", 0.0)),
+            # Barttorvik features
+            "BarthagDiff": float(sa.get("Barthag", 0.0)) - float(sb.get("Barthag", 0.0)),
+            "WABDiff": float(sa.get("WAB", 0.0)) - float(sb.get("WAB", 0.0)),
+            # ESPN BPI features
+            "BPIDiff": float(sa.get("BPI", 0.0)) - float(sb.get("BPI", 0.0)),
+            "BPIOffDiff": float(sa.get("BPIOff", 0.0)) - float(sb.get("BPIOff", 0.0)),
+            "BPIDefDiff": float(sa.get("BPIDef", 0.0)) - float(sb.get("BPIDef", 0.0)),
         }
 
         if self.massey is not None:
@@ -169,3 +186,82 @@ class Predictor:
                 )
 
         return features
+
+
+def _merge_barttorvik(
+    team_stats: pd.DataFrame,
+    barttorvik_path: str | Path | None,
+    teams_csv: str | Path = "data/raw/MTeams.csv",
+) -> pd.DataFrame:
+    """Merge Barttorvik stats into team_stats if data file exists."""
+    if barttorvik_path is None:
+        # Auto-detect common paths
+        for candidate in ["data/barttorvik_2026.csv", "data/barttorvik.csv"]:
+            if Path(candidate).exists():
+                barttorvik_path = candidate
+                break
+
+    if barttorvik_path is None or not Path(barttorvik_path).exists():
+        return team_stats
+
+    try:
+        from data.kenpom import build_team_id_map
+        from data.scrapers.barttorvik import barttorvik_to_team_stats, load_barttorvik
+
+        bt_df = load_barttorvik(barttorvik_path)
+        team_id_map = build_team_id_map(teams_csv) or None
+        bt_stats = barttorvik_to_team_stats(bt_df, team_id_map)
+
+        if not bt_stats.empty:
+            merge_cols = ["TeamID", "Barthag", "WAB"]
+            available = [c for c in merge_cols if c in bt_stats.columns]
+            team_stats = team_stats.merge(
+                bt_stats[available], on="TeamID", how="left",
+            )
+            for col in ["Barthag", "WAB"]:
+                if col in team_stats.columns:
+                    team_stats[col] = team_stats[col].fillna(0.0)
+            print(f"Merged Barttorvik data for {bt_stats['TeamID'].nunique()} teams")
+    except Exception as e:
+        print(f"Warning: Could not merge Barttorvik data: {e}")
+
+    return team_stats
+
+
+def _merge_espn_bpi(
+    team_stats: pd.DataFrame,
+    espn_bpi_path: str | Path | None,
+    teams_csv: str | Path = "data/raw/MTeams.csv",
+) -> pd.DataFrame:
+    """Merge ESPN BPI stats into team_stats if data file exists."""
+    if espn_bpi_path is None:
+        for candidate in ["data/espn_bpi_2026.csv", "data/espn_bpi.csv"]:
+            if Path(candidate).exists():
+                espn_bpi_path = candidate
+                break
+
+    if espn_bpi_path is None or not Path(espn_bpi_path).exists():
+        return team_stats
+
+    try:
+        from data.kenpom import build_team_id_map
+        from data.scrapers.espn_bpi import bpi_to_team_stats, load_espn_bpi
+
+        bpi_df = load_espn_bpi(espn_bpi_path)
+        team_id_map = build_team_id_map(teams_csv) or None
+        bpi_stats = bpi_to_team_stats(bpi_df, team_id_map)
+
+        if not bpi_stats.empty:
+            merge_cols = ["TeamID", "BPI", "BPIOff", "BPIDef"]
+            available = [c for c in merge_cols if c in bpi_stats.columns]
+            team_stats = team_stats.merge(
+                bpi_stats[available], on="TeamID", how="left",
+            )
+            for col in ["BPI", "BPIOff", "BPIDef"]:
+                if col in team_stats.columns:
+                    team_stats[col] = team_stats[col].fillna(0.0)
+            print(f"Merged ESPN BPI data for {bpi_stats['TeamID'].nunique()} teams")
+    except Exception as e:
+        print(f"Warning: Could not merge ESPN BPI data: {e}")
+
+    return team_stats

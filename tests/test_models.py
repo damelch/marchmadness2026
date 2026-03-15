@@ -74,6 +74,11 @@ class TestSyntheticModel:
                 "NCSOSDiff": rng.normal(0, 3),
                 "SeedRoundInteraction": seed_diff * rng.integers(1, 7),
                 "AdjEMStdDiff": rng.normal(0, 5),
+                "BarthagDiff": rng.normal(0, 0.2),
+                "WABDiff": rng.normal(0, 3),
+                "BPIDiff": adj_em_diff * 0.8 + rng.normal(0, 2),
+                "BPIOffDiff": rng.normal(0, 3),
+                "BPIDefDiff": rng.normal(0, 3),
                 "Result": result,
             })
         return pd.DataFrame(rows)

@@ -351,6 +351,34 @@ def _compute_pair_features(
     em_std_b = sb.get("AdjEMStd", 0.0) if "AdjEMStd" in sb.index else 0.0
     features["AdjEMStdDiff"] = float(em_std_a) - float(em_std_b)
 
+    # --- Barttorvik features (if available) ---
+
+    # Barthag: predicted win% vs average D-I team (0 to 1 scale)
+    barthag_a = sa.get("Barthag", 0.0) if "Barthag" in sa.index else 0.0
+    barthag_b = sb.get("Barthag", 0.0) if "Barthag" in sb.index else 0.0
+    features["BarthagDiff"] = float(barthag_a) - float(barthag_b)
+
+    # WAB: Wins Above Bubble (quality metric, can be negative)
+    wab_a = sa.get("WAB", 0.0) if "WAB" in sa.index else 0.0
+    wab_b = sb.get("WAB", 0.0) if "WAB" in sb.index else 0.0
+    features["WABDiff"] = float(wab_a) - float(wab_b)
+
+    # --- ESPN BPI features (if available) ---
+
+    # BPI: overall power index (points above/below average)
+    bpi_a = sa.get("BPI", 0.0) if "BPI" in sa.index else 0.0
+    bpi_b = sb.get("BPI", 0.0) if "BPI" in sb.index else 0.0
+    features["BPIDiff"] = float(bpi_a) - float(bpi_b)
+
+    # BPI Offense and Defense
+    bpi_off_a = sa.get("BPIOff", 0.0) if "BPIOff" in sa.index else 0.0
+    bpi_off_b = sb.get("BPIOff", 0.0) if "BPIOff" in sb.index else 0.0
+    features["BPIOffDiff"] = float(bpi_off_a) - float(bpi_off_b)
+
+    bpi_def_a = sa.get("BPIDef", 0.0) if "BPIDef" in sa.index else 0.0
+    bpi_def_b = sb.get("BPIDef", 0.0) if "BPIDef" in sb.index else 0.0
+    features["BPIDefDiff"] = float(bpi_def_a) - float(bpi_def_b)
+
     return features
 
 
@@ -368,6 +396,13 @@ FEATURE_COLUMNS = [
     "NCSOSDiff",
     "SeedRoundInteraction",
     "AdjEMStdDiff",
+    # Barttorvik features
+    "BarthagDiff",
+    "WABDiff",
+    # ESPN BPI features
+    "BPIDiff",
+    "BPIOffDiff",
+    "BPIDefDiff",
 ]
 
 
