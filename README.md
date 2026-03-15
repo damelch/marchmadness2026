@@ -15,6 +15,7 @@ marchmadness download        # Kaggle NCAA data (2013-2025)
 marchmadness features        # Build KenPom-style feature matrix
 marchmadness train           # Train model (default: xgboost, or set in config.yaml)
 marchmadness evaluate        # Verify calibration
+marchmadness backtest        # Replay 2015-2024 tournaments
 
 # After Selection Sunday — optimize picks
 marchmadness simulate        # Monte Carlo advancement probabilities
@@ -58,7 +59,7 @@ Or use the Makefile:
 
 ```bash
 make build                  # Build Docker image
-make test                   # Run 141 tests
+make test                   # Run 212 tests
 make lint                   # Ruff lint check (zero violations)
 make format                 # Ruff format check
 make simulate               # 50k Monte Carlo sims
@@ -84,7 +85,7 @@ The system has two phases: **build** (train the model before the bracket is anno
 PHASE 1: BUILD (before Selection Sunday)
 
   Kaggle CSVs ──→ Feature Engineering ──→ Training ──→ Evaluation
-  (12 seasons)    (18 matchup features)   (6 models)   (LOSO CV)
+  (12 seasons)    (20 matchup features)   (6 models)   (LOSO CV)
                                               │
                                               ▼
                                         models/saved/model.pkl
@@ -110,7 +111,7 @@ Downloads 12 seasons of NCAA tournament data from Kaggle (2013-2025, excluding 2
 
 #### Step 2 — Engineer features (`marchmadness features`)
 
-Transforms raw box scores into 18 matchup features. Each feature is a **difference** between the two teams (TeamA minus TeamB), so the model learns which gaps matter most.
+Transforms raw box scores into 20 matchup features. Each feature is a **difference** between the two teams (TeamA minus TeamB), so the model learns which gaps matter most.
 
 **From box scores** → the feature pipeline computes KenPom-style efficiency stats for every team in every season:
 - Offensive/defensive efficiency (points per 100 possessions, adjusted for opponent strength)
@@ -121,7 +122,7 @@ Transforms raw box scores into 18 matchup features. Each feature is a **differen
 
 **From Massey Ordinals** → composite ranking averaged across all ranking systems at Selection Sunday
 
-**From external sources** (optional) → Barttorvik T-Rank (Barthag, WAB) and ESPN BPI ratings. These are fetched separately and merged if available — the model defaults missing values to 0.
+**From external sources** (optional) → Barttorvik T-Rank (Barthag, WAB), ESPN BPI ratings, and Vegas betting lines (spread, over/under). These are fetched separately and merged if available — the model defaults missing values to 0.
 
 | Feature | Source | What it captures |
 |---------|--------|-----------------|
@@ -143,13 +144,16 @@ Transforms raw box scores into 18 matchup features. Each feature is a **differen
 | BPIDiff | ESPN BPI | Independent power index rating |
 | BPIOffDiff | ESPN BPI | Offensive strength per 70 possessions |
 | BPIDefDiff | ESPN BPI | Defensive strength per 70 possessions |
+| VegasSpread | Vegas lines | Closing point spread (best predictor) |
+| VegasOU | Vegas lines | Over/under total (pace/style proxy) |
 
 Each tournament game produces two training rows (A-vs-B and B-vs-A for symmetry), giving ~6,000-7,000 rows across 12 seasons. Output: `data/processed/matchup_features.parquet`.
 
-Barttorvik and ESPN BPI features are optional — fetch them with:
+External features are optional — fetch them with:
 ```bash
 marchmadness fetch-bpi          # ESPN BPI (free, no auth)
 marchmadness fetch-barttorvik   # Barttorvik T-Rank (free, may need manual CSV)
+marchmadness fetch-odds         # Live Vegas lines (free API key from the-odds-api.com)
 ```
 
 #### Step 3 — Train the model (`marchmadness train`)
@@ -188,8 +192,9 @@ Output: `models/saved/model.pkl` (pickled model, loadable at prediction time).
 Runs full LOSO cross-validation and reports:
 - **Per-season log-loss and Brier score** — measures prediction accuracy for each holdout year
 - **Seed-tier calibration** — groups matchups into Blowout (1-4 vs 13-16), Competitive (5-8 vs 9-12), and Close (same tier) buckets, checks calibration per tier
+- **Per-round calibration** — separate metrics for R64 through Championship, with bootstrap 95% CIs. Saves a 6-panel calibration chart to `output/calibration_by_round.png` with `--output output/`
 - **Expected Calibration Error (ECE)** — bins predictions into deciles, measures gap between predicted and actual win rates
-- **Baseline comparison** — improvement over a seed-only model (how much the 18 features add)
+- **Baseline comparison** — improvement over a seed-only model (how much the 20 features add)
 
 ### Phase 2: Generating Picks
 
@@ -197,7 +202,7 @@ Runs full LOSO cross-validation and reports:
 
 The `Predictor` class tries three methods in order:
 
-1. **ML model** (best) — if `models/saved/model.pkl` exists, builds the 18 features from KenPom + optional external data and runs them through the trained model
+1. **ML model** (best) — if `models/saved/model.pkl` exists, builds the 20 features from KenPom + optional external data and runs them through the trained model
 2. **KenPom direct** (good) — converts efficiency margin difference to win probability via logistic function: `P(A wins) = 1 / (1 + 10^(-spread/8))`. The 2026 KenPom ratings for all 365 D-I teams are included (`data/kenpom_2026.csv`)
 3. **Seed-based** (fallback) — empirical seed-vs-seed win rates from tournament history, smoothed with a logistic model
 
@@ -377,7 +382,8 @@ marchmadness2026/
 │   │   ├── kaggle_data.py     # Historical NCAA data
 │   │   ├── espn_api.py        # Live bracket & scores
 │   │   ├── espn_bpi.py        # ESPN BPI ratings (free, no auth)
-│   │   └── barttorvik.py      # Barttorvik T-Rank ratings (free)
+│   │   ├── barttorvik.py      # Barttorvik T-Rank ratings (free)
+│   │   └── vegas_lines.py     # Vegas betting lines (The Odds API + historical CSV)
 │   ├── feature_engineering.py # KenPom-style features from box scores
 │   ├── seed_history.py        # Historical seed-vs-seed win rates
 │   ├── kenpom.py              # KenPom ratings integration
@@ -386,7 +392,8 @@ marchmadness2026/
 ├── models/
 │   ├── train.py               # Logistic, XGBoost, LightGBM, CatBoost, RF, NB, Stacked Ensemble
 │   ├── predict.py             # Win probability predictor
-│   └── evaluate.py            # Calibration & accuracy
+│   ├── evaluate.py            # Calibration & accuracy (per-round charts)
+│   └── backtest.py            # Replay 2015-2024 tournaments (LOSO)
 ├── simulation/
 │   ├── engine.py              # Monte Carlo tournament simulator
 │   └── analysis.py            # Survivor pool outcome analysis
@@ -404,7 +411,7 @@ marchmadness2026/
 ├── entries/
 │   ├── manager.py             # Track picks and eliminations (day-based)
 │   └── generator.py           # Full optimization pipeline
-└── tests/                     # Test suite (141 tests)
+└── tests/                     # Test suite (212 tests)
 ```
 
 ## Tests
@@ -415,7 +422,7 @@ pytest tests/ -v
 make test
 ```
 
-141 tests covering model training (all 8 model types including stacked ensemble pickle round-trip), bracket simulation, analytical EV math, Nash equilibrium convergence, DP future values, KenPom integration, ownership model behavior, and external data integrations (Barttorvik, ESPN BPI).
+212 tests covering model training (all 8 model types including stacked ensemble pickle round-trip), bracket simulation, analytical EV math, Nash equilibrium convergence, DP future values, KenPom integration, ownership model behavior, and external data integrations (Barttorvik, ESPN BPI).
 
 Linting is enforced via [ruff](https://docs.astral.sh/ruff/) with rules for errors, warnings, import sorting, modern Python idioms, and common bugs.
 

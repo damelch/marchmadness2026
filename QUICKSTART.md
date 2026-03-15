@@ -136,6 +136,22 @@ docker run --rm -v ./data:/app/data marchmadness fetch-barttorvik
 These grab ESPN BPI and Barttorvik power ratings — free, no account needed.
 They add extra features that improve predictions.
 
+You can also fetch Vegas betting lines (requires a free API key from
+[the-odds-api.com](https://the-odds-api.com)):
+
+```bash
+ODDS_API_KEY=your_key_here docker run --rm \
+  -e ODDS_API_KEY \
+  -v ./data:/app/data \
+  marchmadness fetch-odds
+```
+
+Or validate historical lines if you have a CSV:
+
+```bash
+docker run --rm -v ./data:/app/data marchmadness fetch-odds --historical
+```
+
 ### Step 3 — Build features
 
 ```bash
@@ -143,7 +159,8 @@ docker run --rm -v ./data:/app/data marchmadness features
 ```
 
 This creates the matchup feature matrix from the raw data (~6,000 game rows,
-18 features each). Takes a few seconds.
+20 features each). Vegas line features are included automatically when
+historical data is available. Takes a few seconds.
 
 ### Step 4 — Train the model
 
@@ -168,7 +185,30 @@ docker run --rm \
 
 Prints accuracy, log-loss, and calibration stats. A well-calibrated model
 means when it says "80% chance to win" that team really does win about 80%
-of the time.
+of the time. Add `--output output/` to save a per-round calibration chart.
+
+### Step 6 — Backtest against past tournaments (optional)
+
+```bash
+docker run --rm \
+  -v ./data:/app/data \
+  -v ./models:/app/models \
+  -v ./config.yaml:/app/config.yaml \
+  marchmadness backtest
+```
+
+Replays 2015-2024 tournaments using leave-one-season-out training. Compares
+four strategies: **optimizer** (our full pipeline), **top_seeds** (always
+pick the best seed), **random** (lower bound), and **contrarian** (lowest
+ownership). You can also test a single season:
+
+```bash
+docker run --rm \
+  -v ./data:/app/data \
+  -v ./models:/app/models \
+  -v ./config.yaml:/app/config.yaml \
+  marchmadness backtest --season 2023 --entries 10 --pool 22000
+```
 
 ---
 
@@ -387,6 +427,8 @@ template in `data/bracket.json`.
 | Get picks | `docker run --rm -v ./data:/app/data -v ./models:/app/models -v ./entries:/app/entries -v ./config.yaml:/app/config.yaml marchmadness optimize --day 1` |
 | Mid-tournament advice | `docker run --rm -v ./data:/app/data -v ./models:/app/models -v ./entries:/app/entries -v ./config.yaml:/app/config.yaml marchmadness advise` |
 | Analyze portfolio | `docker run --rm -v ./data:/app/data -v ./models:/app/models -v ./entries:/app/entries -v ./output:/app/output -v ./config.yaml:/app/config.yaml marchmadness analyze` |
+| Fetch Vegas odds | `docker run --rm -e ODDS_API_KEY -v ./data:/app/data marchmadness fetch-odds` |
+| Backtest | `docker run --rm -v ./data:/app/data -v ./models:/app/models -v ./config.yaml:/app/config.yaml marchmadness backtest` |
 | Record results | `docker run --rm -v ./entries:/app/entries -v ./config.yaml:/app/config.yaml marchmadness results --day 1 <team_ids>` |
 | Check status | `docker run --rm -v ./entries:/app/entries -v ./config.yaml:/app/config.yaml marchmadness status` |
 
